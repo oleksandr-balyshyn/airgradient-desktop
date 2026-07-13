@@ -82,15 +82,6 @@ apps:
     common-id: com.airgradient.desktop
     plugs:
       - network
-      - unity7
-    slots:
-      - airgradient-desktop
-
-slots:
-  airgradient-desktop:
-    interface: dbus
-    bus: session
-    name: com.airgradient.desktop
 
 parts:
   rust-deps:

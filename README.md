@@ -123,7 +123,7 @@ Tagged releases build and publish Linux-only `amd64` and `arm64` artifacts from 
 - `airgradient-desktop-<version>-linux-<arch>.tar.gz`: raw release binary plus desktop file, metainfo, application icons, and tray icon assets. This still requires the runtime dependencies listed above.
 - `airgradient-desktop-<version>-linux-<arch>.flatpak`: Flatpak bundle built against the GNOME runtime. The Flatpak installs the desktop launcher, metainfo, application icon, fallback icon name, and tray icon asset inside the sandbox. It also grants network, notifications, and StatusNotifier watcher access for the AirGradient HTTP endpoint, notifications, and tray registration.
 - `airgradient-desktop-<version>-linux-<arch>.AppImage`: self-contained AppImage produced from an AppDir with bundled GTK/libadwaita dependencies where `linuxdeploy` can collect them. It includes the desktop launcher, metainfo, application icons, and tray icon asset. AppImages may still need host graphics, desktop session, D-Bus, and FUSE support.
-- `airgradient-desktop-<version>-linux-<arch>.snap`: strict Snap package built on `core24` with the GNOME extension. It includes the desktop launcher, AppStream metadata, application icons, tray icon asset, network access, and the D-Bus application slot.
+- `airgradient-desktop-<version>-linux-<arch>.snap`: strict Snap package built on `core24` with the GNOME extension. It includes the desktop launcher, AppStream metadata, application icons, tray icon asset, and network access.
 
 Each tagged release also uploads unversioned aliases for stable latest-download URLs. For example:
 
