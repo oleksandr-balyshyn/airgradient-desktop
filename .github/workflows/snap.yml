@@ -1,0 +1,144 @@
+name: Snap
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Snap Store channel to release to.
+        required: true
+        type: choice
+        default: stable
+        options:
+          - edge
+          - beta
+          - candidate
+          - stable
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snap-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  snap:
+    name: Build and Publish Snap ${{ matrix.artifact_arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact_arch: amd64
+            runner: ubuntu-24.04
+            snap_arch: amd64
+          - artifact_arch: arm64
+            runner: ubuntu-24.04-arm
+            snap_arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build snap
+        id: build
+        uses: snapcore/action-build@v1
+        with:
+          snapcraft-channel: 9.x/stable
+          snapcraft-args: pack --build-for=${{ matrix.snap_arch }}
+
+      - name: Print Snapcraft logs
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          log_dir="${HOME}/.local/state/snapcraft/log"
+          if [[ ! -d "${log_dir}" ]]; then
+            echo "Snapcraft log directory not found: ${log_dir}"
+            exit 0
+          fi
+
+          found=false
+          for log in "${log_dir}"/*.log; do
+            if [[ ! -f "${log}" ]]; then
+              continue
+            fi
+
+            found=true
+            echo "::group::$(basename "${log}")"
+            sed -n '1,400p' "${log}"
+            echo "::endgroup::"
+          done
+
+          if [[ "${found}" == "false" ]]; then
+            echo "No Snapcraft log files found in ${log_dir}"
+          fi
+
+      - name: Upload Snapcraft logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapcraft-logs-${{ matrix.artifact_arch }}
+          path: ~/.local/state/snapcraft/log/*.log
+          if-no-files-found: ignore
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: airgradient-desktop-snap-${{ matrix.artifact_arch }}
+          path: ${{ steps.build.outputs.snap }}
+          if-no-files-found: error
+
+      - name: Resolve Snap Store publish decision
+        id: publish
+        if: vars.PUBLISH_SNAP_STORE == 'true'
+        shell: bash
+        env:
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            channel="${INPUT_CHANNEL}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            channel="stable"
+          else
+            echo "Snap Store publishing is only enabled for workflow_dispatch or tag runs."
+            echo "should_publish=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "should_publish=true" >> "${GITHUB_OUTPUT}"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved Snap Store channel: ${channel}"
+
+      - name: Check Snap Store credentials
+        id: snap-store
+        if: steps.publish.outputs.should_publish == 'true'
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [ -n "${SNAPCRAFT_STORE_CREDENTIALS}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish snap
+        if: steps.snap-store.outputs.available == 'true'
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.build.outputs.snap }}
+          release: ${{ steps.publish.outputs.channel }}
