@@ -101,7 +101,6 @@ jobs:
 
       - name: Resolve Snap Store publish decision
         id: publish
-        if: vars.PUBLISH_SNAP_STORE == 'true'
         shell: bash
         env:
           INPUT_CHANNEL: ${{ inputs.channel }}

@@ -91,8 +91,10 @@ Packaging dependencies used by the GitHub Actions release job:
 sudo apt install flatpak flatpak-builder appstream desktop-file-utils patchelf file wget libfuse2t64
 ```
 
-Snap packages are built in GitHub Actions with Snapcraft and the GNOME Snapcraft extension.
-Tagged releases upload the Snap to GitHub Releases by default. To also publish to the Snap Store `stable` channel, set the repository variable `PUBLISH_SNAP_STORE` to `true` and provide package-scoped `SNAPCRAFT_STORE_CREDENTIALS`.
+Snap packages are built in a dedicated `snap.yml` GitHub Actions workflow with Snapcraft and the GNOME
+Snapcraft extension, running on every push and pull request as a build check. Tagged releases and manual
+`workflow_dispatch` runs also publish to the Snap Store (`stable` on tag pushes, or a chosen channel via
+dispatch), provided package-scoped `SNAPCRAFT_STORE_CREDENTIALS` is configured.
 
 ## Run Locally
 
