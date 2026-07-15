@@ -10,8 +10,32 @@
   </developer>
   <description>
     <p>
-      Air Monitor is a GTK 4 and libadwaita desktop dashboard for an
-      AirGradient device that exposes the local-server endpoint.
+      If you work at a PC in the same room as your AirGradient monitor, you
+      already know the problem: the device's own display is small and easy
+      to ignore, its LED indicator only tells you "good," "okay," or "bad"
+      without the actual numbers, and its web UI isn't exactly pleasant to
+      keep open in a tab all day. Air Monitor solves this by putting a real
+      dashboard, and real notifications, right on your GNOME desktop.
+    </p>
+    <p>The dashboard shows, at a glance:</p>
+    <ul>
+      <li>Air Quality Index (AQI), color-coded for quick reading</li>
+      <li>Temperature and humidity</li>
+      <li>CO2, TVOC, and NOx</li>
+      <li>Particulate matter: PM0.3 count, PM1.0, PM2.5, and PM10</li>
+      <li>Trend arrows comparing each reading to the previous one</li>
+      <li>The timestamp of the last successful update</li>
+    </ul>
+    <p>
+      Air Monitor watches incoming readings and raises desktop notifications
+      when CO2, AQI, PM2.5, TVOC, NOx, or humidity drift outside healthy
+      ranges, or when the device goes offline. It lives quietly in the tray,
+      polling in the background so you can reopen the dashboard, or quit
+      outright, without losing your place.
+    </p>
+    <p>
+      Air Monitor is built by and for the Linux and open source community.
+      There are no plans for a macOS or Windows build.
     </p>
   </description>
   <url type="homepage">https://github.com/oleksandr-balyshyn/airgradient-desktop</url>

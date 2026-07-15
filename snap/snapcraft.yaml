@@ -4,10 +4,13 @@ summary: Monitor an AirGradient local-server device
 description: |
   📊 **Your AirGradient device, right on your desktop.**
 
-  You've got an AirGradient monitor reporting great local air quality data,
-  but checking it means opening a browser tab or walking over to glance at
-  a small on-device display. Air Monitor puts those same readings directly
-  on your GNOME desktop, always one glance away.
+  If you work at a PC in the same room as your AirGradient monitor, you
+  already know the problem: the device's own display is small and easy to
+  ignore, its LED indicator only tells you "good," "okay," or "bad" without
+  the actual numbers, and its web UI isn't exactly pleasant to keep open in
+  a tab all day. Air Monitor solves this by putting a real dashboard, and
+  real notifications, right on your GNOME desktop — no more walking over to
+  squint at a tiny screen or babysitting a browser tab.
 
   🌬️ **A full air quality dashboard, at a glance:**
 
@@ -48,6 +51,13 @@ description: |
 
   * A Linux desktop with GTK 4 and libadwaita (GNOME works out of the box).
   * An AirGradient device exposing its local-server endpoint on your network.
+
+  🐧 **Linux only, on purpose.**
+
+  Air Monitor is built by and for the Linux and open source community.
+  There are no plans for a macOS or Windows build — this project exists to
+  make the GNOME desktop a first-class place to watch your air quality,
+  not to be a cross-platform product.
 
   💜 Free and open source — source and issues live at
   https://github.com/oleksandr-balyshyn/airgradient-desktop
