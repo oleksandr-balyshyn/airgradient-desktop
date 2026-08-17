@@ -1,6 +1,6 @@
 # Air Monitor
 
-Air Monitor is a GTK 4 + libadwaita desktop dashboard for an AirGradient device that exposes the local-server endpoint at `/measures/current`.
+Air Monitor is a GTK 4 + libadwaita desktop dashboard for an AirGradient device that exposes the local-server endpoint at `/measures/current`. It is written in Rust using [Relm4](https://relm4.org/book/stable/).
 
 The app is intentionally small and direct: configure the device URL, fetch the current measurement payload, normalize it into a Rust data model, and render the result as a GNOME-style air quality dashboard.
 
@@ -14,6 +14,9 @@ The official AirGradient web application is good, but it is not quite the interf
 
 ## Screenshots
 
+These predate the tabbed interface and the theme list, so they show the older
+single-page layout.
+
 ![Air Monitor dashboard](docs/Screenshot-1.png)
 
 ![Air Monitor settings](docs/Screenshot-2.png)
@@ -22,16 +25,24 @@ The official AirGradient web application is good, but it is not quite the interf
 
 ## What It Shows
 
-The dashboard displays:
+The window has two tabs, switched from the header bar.
+
+**Main** shows the current readings:
 
 - Air Quality Index (AQI)
 - temperature and humidity
 - CO2, TVOC, and NOx
 - PM0.3 count, PM1.0, PM2.5, and PM10
-- trend indicators based on the previous reading kept in memory
+- trend indicators comparing each reading with the previous one
+- a chart of recorded PM2.5, the reading most worth watching over time
 - the last successful update time
 
-Pressure and historical charts are intentionally not part of the current UI.
+**History** shows every one of those metrics as a card with its own chart and a
+low/average/high summary of the recorded range.
+
+Recorded measurements are kept across restarts, so the charts are not empty when
+you reopen the app. Pressure is not exposed by the local-server payload and is
+not shown.
 
 ## How It Works
 
@@ -39,9 +50,10 @@ At a high level:
 
 1. The user configures a local AirGradient device URL in Settings.
 2. The app stores the URL in the XDG config directory.
-3. The dashboard fetches `{server_url}/measures/current`.
+3. The app fetches `{server_url}/measures/current` on a timer.
 4. The JSON payload is converted into `AirMeasureSnapshot`.
-5. GTK widgets are refreshed with values, units, colors, and trend deltas.
+5. The snapshot is appended to the measurement history and written to the XDG data directory.
+6. The snapshot and the history are sent as messages to the UI components, which redraw themselves.
 
 For a deeper explanation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -176,31 +188,59 @@ If `XDG_CONFIG_HOME` is not set, the fallback is:
 $HOME/.config/airgradient-desktop/config.json
 ```
 
+Recorded measurements are stored separately, under the XDG *data* directory:
+
+```text
+$XDG_DATA_HOME/airgradient-desktop/history.json
+```
+
+or, as a fallback:
+
+```text
+$HOME/.local/share/airgradient-desktop/history.json
+```
+
+They are kept apart from the configuration on purpose: `config.json` holds
+choices you made, while `history.json` holds data the app recorded. A corrupt or
+deleted history costs you charts, never settings. The file keeps the most recent
+2,880 readings, which is a day at the default 30-second refresh.
+
 ## Project Layout
 
 ```text
 src/
   main.rs                 Program entry point.
-  app.rs                  Creates the libadwaita application.
+  app.rs                  Reads config, then starts the Relm4 application.
   app_info.rs             Shared application ID and display name.
   config.rs               Reads/writes user configuration.
   device.rs               Normalizes device URLs and fetches measurements.
-  notifications.rs        Delivers alert notifications through desktop APIs.
-  state.rs                In-memory page, URL, theme, and refresh state.
+  history.rs              Recorded measurements, persisted to the data directory.
+  theme.rs                The 57 colour themes and the CSS they generate.
+  alerts.rs               Decides which readings deserve a notification.
+  notifications.rs        Delivers those notifications to the desktop.
+  state.rs                The page list shared by the UI components.
   sensors/
     air_quality.rs        Parses AirGradient JSON into typed values.
     thresholds.rs         Classifies sensor values into semantic statuses.
   ui/
-    app.rs                Main window, navigation, and timers.
-    dashboard.rs          Dashboard layout and measurement application.
-    settings.rs           Settings page and persistence callbacks.
-    tray.rs               StatusNotifier tray integration.
+    app.rs                Root component: window, header, tabs, refresh loop.
+    dashboard.rs          Main tab.
+    history_view.rs       History tab.
+    metrics.rs            Table of what the app measures.
+    metric_card.rs        A metric with its chart, used by both tabs.
+    chart.rs              Cairo line chart plus its coordinate maths.
     sensor_card.rs        Reusable pollutant metric card.
-    aqi_widget.rs         Large AQI widget.
-    temperature_widget.rs Temperature widget.
-    humidity_widget.rs    Humidity widget.
+    aqi_card.rs           Large AQI card.
+    environment_card.rs   Temperature and humidity card.
+    settings.rs           Settings page.
+    welcome.rs            Onboarding page.
+    help.rs               Help page.
+    theming.rs            Loads a theme's colours into GTK.
+    status.rs             Maps sensor status to CSS classes.
+    trend.rs              Trend arithmetic and value formatting.
+    tray.rs               StatusNotifier tray integration.
 assets/
-  dashboard.css           GTK CSS for the dashboard.
+  dashboard.css           GTK CSS for the cards and charts.
 resources/
   airgradient.gresource.xml
   icons/                  Symbolic SVG icons embedded into the binary.
@@ -212,26 +252,51 @@ docs/
 
 ## Important Rust Concepts Used Here
 
-This codebase is a useful GTK/Rust learning project because it uses common Rust patterns in a small app:
+This codebase is a useful Rust/Relm4 learning project because it uses common
+patterns in a small app:
 
-- `Option<T>` means a sensor value may be missing from the JSON payload.
+- `Option<T>` means a sensor value may be missing from the JSON payload. A
+  missing reading is `None`, never `0`, because zero is a valid measurement.
 - `Result<T, String>` is used when a URL, network request, or JSON parse can fail.
-- `Rc<RefCell<T>>` is used for shared, mutable state on the GTK main thread.
-- `Clone` on GTK widgets is cheap: it clones a reference to the same underlying GObject, not a whole visual tree.
-- GTK signals use closures. Values moved into a signal callback usually need to be cloned first.
-- Blocking HTTP work is moved off the GTK main loop with `gio::spawn_blocking`.
+- Each part of the screen is a Relm4 **component**: a small struct holding its own
+  state, plus a `view!` block declaring its widgets. Fields marked `#[watch]` are
+  re-evaluated whenever that state changes, so no code ever has to remember to
+  update a label.
+- Components communicate only by **messages** — an input enum for what a component
+  accepts, an output enum for what it reports upwards. They never share mutable
+  state, so there is no `Rc<RefCell<T>>` anywhere in the UI.
+- Blocking HTTP work runs on a background thread pool via
+  `sender.spawn_oneshot_command()`, and its result arrives back as a message.
+- Pure logic (trend text, colour mixing, chart coordinates, thresholds) lives in
+  modules that never import GTK, which is what makes it unit-testable without a
+  display.
 
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for more detail.
 
 ## Theme Support
 
-- The app defaults to the system theme.
-- Settings can force System, Light, or Dark mode.
-- Dark mode uses a slightly darker app shell background.
-- Dashboard text uses explicit GNOME dark palette colors on cards so it remains readable on light gradient cards.
+Settings has a Theme dropdown with 57 entries:
+
+- **System Default** follows the desktop's light or dark preference.
+- **Adwaita Light** and **Adwaita Dark** force libadwaita's own palette.
+- 54 named themes — Catppuccin, Nord, Dracula, Gruvbox, Solarized, Tokyo Night,
+  Everforest, Rosé Pine, One Dark, Monokai, Material, Ayu, Kanagawa, GitHub and
+  others — each setting its own colours.
+
+Themes preview as you move through the list and are saved only when you press
+Save, so trying them costs nothing.
+
+A theme is defined by just three colours: a background, a foreground, and an
+accent. Everything else libadwaita needs is derived by mixing them, and the
+result is applied as `@define-color` overrides, so every widget in the app
+follows the theme. Adding one is a single line in `src/theme.rs`.
+
+Air-quality status colours (green through red) and trend colours are deliberately
+*not* themed: red has to mean "bad air" in every theme.
 
 ## Roadmap
 
+- Add a time-range selector to the History tab.
 - Implement a lightweight backend proxy so the desktop app does not have to fetch directly from the device.
 - Make the backend proxy available as a public server option.
 - Add a web UI that can run in kiosk mode on a TV or screensaver display.
@@ -239,14 +304,23 @@ See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for more detail.
 
 ## Dependency Compatibility
 
-`libadwaita` and `gtk4` must be from compatible gtk-rs release trains. This project currently uses:
+Relm4 owns the entire gtk-rs dependency train. The app does **not** declare
+`gtk4`, `libadwaita`, `glib`, `gio` or `gdk-pixbuf` itself — it uses Relm4's
+re-exports (`relm4::gtk`, `relm4::adw`, `relm4::gtk::gio`, and so on). That makes
+it impossible to link two incompatible gtk-rs versions by accident.
 
-- `adw` (`libadwaita`) `0.7` with feature `v1_4`
-- `gtk4` `0.9`
+```toml
+relm4 = { version = "0.11", features = ["libadwaita", "macros", "gnome_45"] }
+```
 
-If you upgrade one, upgrade the related gtk-rs crates together.
+The `gnome_45` feature selects the API level: libadwaita 1.4 bindings
+(`AdwToolbarView`, `AdwViewSwitcher`, `AdwEntryRow`, `AdwSpinRow`) and GTK 4.12
+bindings. It is deliberately not higher, because the GitHub Actions Ubuntu 24.04
+image ships GTK 4.14 and libadwaita 1.5 — anything above this level would build
+on a current desktop and fail in CI.
 
-The `v1_4` libadwaita feature is enabled because Settings uses native rows such as `AdwEntryRow` and `AdwSpinRow`.
+Upgrading Relm4 upgrades the whole train at once; that is the intended way to
+move versions here.
 
 ## Install Notes
 
@@ -269,6 +343,8 @@ sudo update-desktop-database /usr/share/applications
 
 - [AirGradient local-server documentation](https://github.com/airgradienthq/arduino/blob/master/docs/local-server.md)
 - [AirGradient ONE indoor air quality monitor](https://www.airgradient.com/airgradient-one/)
+- [Relm4 book](https://relm4.org/book/stable/)
+- [Relm4 API documentation](https://docs.rs/relm4/)
 - [gtk-rs documentation](https://gtk-rs.org/)
 - [gtk4-rs book](https://gtk-rs.org/gtk4-rs/git/book/)
 - [GNOME Human Interface Guidelines](https://developer.gnome.org/hig/)

@@ -1,120 +1,216 @@
 # Architecture
 
-This document explains how Air Monitor is structured and how data moves through the app. It is written for contributors who may be new to Rust, GTK, or libadwaita.
+This document explains how Air Monitor is structured and how data moves through
+the app. It is written for contributors who may be new to Rust, GTK, libadwaita,
+or Relm4.
 
-## Runtime Overview
+## The Short Version
+
+The app is built with [Relm4](https://relm4.org/book/stable/), which is an
+implementation of the Elm architecture on top of GTK 4. Three rules follow from
+that, and most of the design falls out of them:
+
+1. **The screen is made of components.** A component is a struct holding a little
+   state (its *model*), plus a declaration of its widgets (its *view*). Parts of
+   the view marked `#[watch]` are recalculated whenever the model changes, so
+   nothing in this codebase ever calls "now go and update that label".
+2. **Components talk by messages, not by sharing state.** Each has an input enum
+   (what it accepts) and an output enum (what it reports upwards). There is no
+   shared mutable state in the UI at all — no `Rc<RefCell<T>>`.
+3. **Only the root component does input/output.** It owns the config file, the
+   measurement history, the HTTP fetches, the alert policy, and the tray icon.
+   Everything else is handed finished results.
+
+## Startup
 
 ```text
 main.rs
   -> app::run()
-    -> creates adw::Application
-      -> ui::build_main_window()
-        -> creates pages, header bar, settings, dashboard
-        -> starts timers
-        -> fetches measurements when a server URL exists
+       reads config.json
+       registers the embedded icon resources
+       loads dashboard.css
+    -> RelmApp::run::<ui::app::App>(config)
+      -> App::init()
+           applies the saved theme
+           launches the child components
+           assembles the page stack and the tab stack
+           starts the one-second ticker
+           fetches immediately if a device is configured
 ```
 
-The application runs on GTK's main thread. UI updates must happen on that main thread. Network work is blocking, so it is executed with `gio::spawn_blocking` and then the result is applied back to GTK widgets.
+`RelmApp::new()` initialises GTK and libadwaita, which is why the icons and
+stylesheet can be registered before the window exists. `visible_on_activate(false)`
+is how "start minimized" is honoured: the window is built but never presented.
 
-## Main Modules
+## The Component Tree
 
-### `src/app.rs`
+```text
+App                              root: window, header bar, navigation, I/O
+├── Welcome                      onboarding, until a device URL is saved
+├── ViewStack                    the two top-level tabs
+│   ├── Dashboard                "Main" tab
+│   │   ├── AqiCard
+│   │   ├── EnvironmentCard ×2   temperature, humidity
+│   │   ├── SensorCard ×6        CO2, TVOC, NOx, PM0.3, PM1, PM2.5, PM10
+│   │   └── MetricCard           PM2.5 over time
+│   │       └── Chart
+│   └── HistoryView              "History" tab
+│       └── MetricCard × N       one per entry in ui::metrics::METRICS
+│           └── Chart
+├── Settings
+└── Help
+```
 
-Owns application startup. It creates `adw::Application`, reads the config file, creates `AppState`, and asks the UI module to build the main window.
+Two stacks, for two different jobs:
 
-### `src/config.rs`
+- A `gtk::Stack` switches between whole pages — onboarding, the measurement view,
+  Settings, Help. Pages are identified by `state::Page`, and the root switches
+  them with a single `#[watch] set_visible_child_name: model.page.id()`.
+- An `adw::ViewStack` holds the Main and History tabs. It is a `ViewStack` rather
+  than a plain `Stack` because that is what an `AdwViewSwitcher` binds to, which
+  gives the header bar the standard GNOME tab control for free.
 
-Reads and writes `config.json` under the XDG config directory. It stores only user preferences that should survive app restarts, such as the server URL and refresh interval.
-
-### `src/device.rs`
-
-Owns the AirGradient local-server boundary. It normalizes user-entered base URLs and performs the blocking HTTP request to `/measures/current`. The GTK layer calls this module from `gio::spawn_blocking` so network work does not freeze the main loop.
-
-### `src/state.rs`
-
-Stores in-memory UI state:
-
-- current page
-- theme mode
-- configured server URL
-- refresh interval
-- an action counter used for simple user actions
-
-This state is wrapped in `Rc<RefCell<AppState>>` when shared with GTK callbacks.
-
-`Rc` means "reference counted". Multiple callbacks can own a pointer to the same state.
-
-`RefCell` means "checked at runtime". Rust normally enforces borrowing at compile time. GTK signal callbacks are dynamic, so `RefCell` lets callbacks temporarily borrow or mutate shared state while still checking that borrows do not overlap incorrectly.
-
-### `src/sensors/`
-
-Normalizes JSON from AirGradient into `AirMeasureSnapshot`.
-
-The app uses `Option<f32>` for sensor values because local-server payloads can vary by model and firmware. A missing value is represented as `None`, not as `0`.
-
-Threshold helpers classify values into semantic status colors. They do not depend on GTK; the UI maps those statuses to concrete GNOME palette colors.
-
-### `src/notifications.rs`
-
-Delivers alert notifications through the available Linux desktop mechanisms. Alert policy stays in `alerts.rs`; this module is only the infrastructure adapter for notification delivery.
-
-### `src/ui/`
-
-Builds GTK widgets and connects signals.
-
-- `ui/app.rs` owns the window, navigation, and timers.
-- `ui/settings.rs` owns Settings page construction and persistence callbacks.
-- `ui/tray.rs` owns StatusNotifier tray integration.
-- `ui/dashboard.rs` builds the dashboard layout and applies parsed measurements.
-- widget files such as `sensor_card.rs` and `aqi_widget.rs` wrap repeated GTK controls behind small Rust structs.
+The switcher is only shown while the measurement view is visible; Settings, Help
+and onboarding show the app name instead, because tabs would mean nothing there.
 
 ## Data Flow
 
-```text
-Settings URL
-  -> config::write_config()
-  -> AppState::set_server_url()
-  -> trigger_fetch_current_measures()
-  -> device::fetch_current_measurements()
-  -> HTTP GET /measures/current
-  -> parse_air_measurements()
-  -> DashboardPageWidgets::apply_measurements()
-  -> individual GTK labels/cards are updated
-```
-
-## Fetching
-
-`trigger_fetch_current_measures()` starts the fetch and updates status labels.
-
-`device::fetch_current_measurements()` performs the HTTP request and JSON parsing. It is intentionally not async by itself; it uses `reqwest::blocking` and is called inside `gio::spawn_blocking`.
-
-This avoids freezing the GTK interface while the device responds.
-
-## Dashboard History
-
-The dashboard keeps the last five `AirMeasureSnapshot` values in memory. The current implementation uses only the most recent previous value to display trends such as:
+A refresh, end to end:
 
 ```text
-↓ -3 AQI
-↑ +42 ppm
+ticker fires (once a second)
+  -> enough seconds have passed?
+    -> App::start_fetch()
+         sender.spawn_oneshot_command(...)          background thread
+           -> device::fetch_current_measurements()
+                HTTP GET {base_url}/measures/current
+                sensors::parse_air_measurements()
+      -> AppCommand::Fetched(Ok(snapshot))          back on the UI thread
+           history.push(Sample::now(snapshot))
+           history.save()
+           alerts.evaluate(&snapshot)  -> notifications::send_air_quality_notification()
+           dashboard.emit(DashboardInput::Show(snapshot))
+           dashboard.emit(DashboardInput::ShowHistory(history))
+           history_view.emit(HistoryViewInput::Show(history))
 ```
 
-The history is not written to disk. Restarting the app clears it.
+`fetch_current_measurements` is blocking, so it must never run on the UI thread.
+`spawn_oneshot_command` puts it on Relm4's blocking thread pool and delivers the
+result back as a message, which is the whole reason the UI stays responsive while
+a device is slow or unreachable.
 
-## Theme Handling
+The recorded history is shared with both views as one reference-counted
+allocation, because copying a day of readings twice per refresh would be waste.
 
-The Settings page changes libadwaita's `ColorScheme`.
+## Timers
 
-The app also listens to `StyleManager::is_dark()` and toggles a CSS class on the root widget. That class gives the dark theme a slightly darker shell background while preserving libadwaita's native theme behavior.
+There is exactly one timer: a one-second ticker, registered against the
+component's shutdown receiver so it dies with the component instead of leaking.
 
-## GTK Resource Handling
+It drives two things:
 
-The symbolic SVG icons live in `resources/icons/`. `build.rs` compiles them into a `.gresource` file at build time. At runtime, `ui::register_resources()` registers the compiled resource and adds it to GTK's icon theme path.
+- the "Last updated: 17s ago" label, and
+- the automatic refresh, which fires once `seconds_since_fetch` reaches the
+  configured interval.
 
-That is why widgets can use icon names such as:
+Using one ticker for both means changing the refresh interval in Settings needs
+no timer bookkeeping at all: the next tick simply compares against the new
+number.
+
+## Modules That Do Not Know About GTK
+
+These are plain Rust, importing nothing from GTK, which is what makes them
+testable without a display. Most of the test suite lives here.
+
+| Module | Responsibility |
+| --- | --- |
+| `sensors::air_quality` | Parse device JSON into `AirMeasureSnapshot` |
+| `sensors::thresholds` | Classify a reading as green/yellow/orange/red |
+| `device` | Normalize base URLs, perform the HTTP request |
+| `config` | Read and write `config.json` |
+| `history` | The measurement ring buffer and its file |
+| `alerts` | Decide which readings deserve a notification |
+| `theme` | The 57 palettes and the CSS they generate |
+| `ui::trend` | Trend text and value formatting |
+| `ui::status` | Map a sensor status to a CSS class |
+| `ui::metrics` | The table of what the app measures |
+| `ui::chart` (lower half) | Chart bounds, downsampling, coordinates |
+
+The rule to preserve: **domain logic decides what a reading means; the UI decides
+how it looks.** `thresholds` returns `StatusColor::Red`; `ui::status` turns that
+into the class name `"status-red"`; `dashboard.css` decides what red looks like.
+
+## Missing Readings
+
+Sensor values are `Option<f32>` throughout, because AirGradient models and
+firmware versions expose different fields. A missing value is `None` and displays
+as `--`. It is never coerced to `0`, and it is skipped rather than zeroed when
+building a chart series, because zero is a legitimate measurement and would draw
+a false dip.
+
+## Themes
+
+`theme.rs` describes a theme as three colours — background, foreground, accent —
+and derives everything else by mixing. Cards, header bars and popovers are the
+background nudged towards the foreground by fixed amounts; text on an accent
+button is black or white depending on the accent's brightness.
+
+The result is emitted as libadwaita `@define-color` overrides and loaded into one
+reusable `CssProvider` by `ui::theming`. Reusing a single provider is deliberate:
+adding a new provider per switch would stack them up and leave old themes
+fighting the current one.
+
+`dashboard.css` is written in terms of those named colours (`@card_fg_color`,
+`@window_bg_color`), never literal greys, which is what lets every theme work.
+The exceptions are air-quality status colours and trend colours, which are fixed
+on purpose — red has to mean "bad air" in every theme.
+
+## Storage
+
+Two files, deliberately separate:
+
+```text
+$XDG_CONFIG_HOME/airgradient-desktop/config.json    settings the user chose
+$XDG_DATA_HOME/airgradient-desktop/history.json     measurements the app recorded
+```
+
+Configuration failures are surfaced to the user (the Settings status line
+explains why defaults were loaded). History failures are not: a missing, corrupt
+or unwritable history yields an empty history and a line on stderr, because
+losing recorded readings is not worth interrupting someone looking at live air
+quality.
+
+## Notifications
+
+`alerts.rs` decides *whether* to notify — it requires two consecutive bad
+readings, applies a 20-minute cooldown per alert kind, and re-fires early only
+when a reading escalates to a worse severity. It knows nothing about GTK or D-Bus.
+
+`notifications.rs` decides *how* to deliver, using `gio::Notification` through the
+application's own ID. That is not an arbitrary choice: under strict snap
+confinement there is no `notify-send` binary to shell out to, and raw
+`org.freedesktop.Notifications` D-Bus calls can be silently dropped by the shell
+for senders it does not recognise as a real app.
+
+## Background Operation
+
+Closing the window hides it rather than quitting. The root component holds a
+`gio::ApplicationHoldGuard`, which keeps the process alive with no visible window
+so polling and alerts continue from the tray. Quitting is an explicit action from
+the tray menu or the `app.quit` action.
+
+The tray itself runs on its own thread, owned by `ksni`. It communicates by
+sending `AppInput` messages down a Relm4 sender, which is thread-safe — there is
+no polling and no shared state between the two threads.
+
+## GTK Resources
+
+`build.rs` runs `glib-compile-resources` to compile `resources/icons/` into a
+GResource bundle. `ui::register_resources()` registers it and adds it to the icon
+theme search path, which is what allows:
 
 ```rust
-Image::from_icon_name("airgradient-co2-symbolic")
+gtk::Image::from_icon_name("airgradient-co2-symbolic")
 ```
 
-instead of loading SVG files manually.
+instead of loading SVG files at runtime.
