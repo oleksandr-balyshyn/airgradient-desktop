@@ -11,6 +11,7 @@ pub mod device;
 pub mod notifications;
 pub mod sensors;
 pub mod state;
+pub mod theme;
 pub mod ui;
 
 pub use app::run;

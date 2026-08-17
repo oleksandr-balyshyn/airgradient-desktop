@@ -6,6 +6,7 @@ use airgradient_desktop::config::{
     read_config_from_path, write_config_to_path, AppConfig, ConfigStartupNotice, RefreshInterval,
 };
 use airgradient_desktop::device::DeviceBaseUrl;
+use airgradient_desktop::theme::DEFAULT_THEME_ID;
 
 #[test]
 fn config_round_trip_uses_validated_values() {
@@ -19,6 +20,7 @@ fn config_round_trip_uses_validated_values() {
         refresh_interval: RefreshInterval::new(45).expect("interval should be valid"),
         notifications_enabled: false,
         start_minimized: true,
+        theme: "nord".to_string(),
     };
 
     write_config_to_path(&path, &config).expect("config should write");
@@ -32,6 +34,27 @@ fn config_round_trip_uses_validated_values() {
     assert_eq!(loaded.config.refresh_interval.as_secs(), 45);
     assert!(!loaded.config.notifications_enabled);
     assert!(loaded.config.start_minimized);
+    assert_eq!(loaded.config.theme, "nord");
+}
+
+/// A config file written before themes existed has no `theme` key. Reading one
+/// must not fail; it should quietly fall back to following the system.
+#[test]
+fn config_without_a_theme_falls_back_to_the_default() {
+    let path = unique_config_path("no-theme");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("test dir should be created");
+    }
+    fs::write(
+        &path,
+        r#"{"server_url":"http://192.168.1.201","refresh_interval_secs":30}"#,
+    )
+    .expect("legacy config should be written");
+
+    let loaded = read_config_from_path(&path);
+
+    assert_eq!(loaded.startup_notice, None);
+    assert_eq!(loaded.config.theme, DEFAULT_THEME_ID);
 }
 
 #[test]

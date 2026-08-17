@@ -16,7 +16,7 @@ use crate::config::{
     AppConfig, RefreshInterval, MAX_REFRESH_INTERVAL_SECS, MIN_REFRESH_INTERVAL_SECS,
 };
 use crate::device::DeviceBaseUrl;
-use crate::state::ThemeMode;
+use crate::theme::{self, Theme};
 
 /// What the settings page needs to render its initial values.
 #[derive(Debug, Clone)]
@@ -25,7 +25,7 @@ pub struct SettingsInit {
     pub refresh_interval: RefreshInterval,
     pub notifications_enabled: bool,
     pub start_minimized: bool,
-    pub theme_mode: ThemeMode,
+    pub theme_id: String,
     /// Message explaining why defaults were loaded, if anything went wrong.
     pub status: String,
 }
@@ -47,8 +47,9 @@ pub enum SettingsInput {
 pub enum SettingsOutput {
     /// The user saved a valid configuration.
     Save(Box<AppConfig>),
-    /// The user picked a different appearance. Applied immediately, not saved.
-    ThemeChanged(ThemeMode),
+    /// The user picked a different theme. Applied immediately so the change is
+    /// visible while browsing the list; only written to disk on save.
+    ThemeChanged(&'static Theme),
     /// The user asked for a sample notification.
     TestNotification,
 }
@@ -58,7 +59,7 @@ pub struct Settings {
     interval_secs: f64,
     notifications_enabled: bool,
     start_minimized: bool,
-    theme_mode: ThemeMode,
+    theme_id: String,
     status: String,
 }
 
@@ -83,19 +84,9 @@ impl Settings {
             refresh_interval,
             notifications_enabled: self.notifications_enabled,
             start_minimized: self.start_minimized,
+            theme: self.theme_id.clone(),
         })
     }
-}
-
-/// Order of the entries in the appearance dropdown.
-const THEME_CHOICES: [ThemeMode; 3] = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark];
-
-/// Index of a theme mode in the dropdown.
-fn theme_index(mode: ThemeMode) -> u32 {
-    THEME_CHOICES
-        .iter()
-        .position(|choice| *choice == mode)
-        .unwrap_or(0) as u32
 }
 
 #[relm4::component(pub)]
@@ -111,13 +102,16 @@ impl SimpleComponent for Settings {
 
             adw::PreferencesGroup {
                 set_title: "Appearance",
-                set_description: Some("GNOME apps should follow the system style by default."),
+                set_description: Some(
+                    "System Default follows the desktop's light or dark preference. \
+                     The other themes set their own colours.",
+                ),
 
                 adw::ComboRow {
-                    set_title: "Style",
-                    set_subtitle: "Use the system preference or force a light or dark appearance",
-                    set_model: Some(&gtk::StringList::new(&["System", "Light", "Dark"])),
-                    set_selected: theme_index(model.theme_mode),
+                    set_title: "Theme",
+                    set_subtitle: "Applied while you browse the list; save to keep it",
+                    set_model: Some(&gtk::StringList::new(&theme::names())),
+                    set_selected: theme::index_of(&model.theme_id),
                     connect_selected_notify[sender] => move |row| {
                         sender.input(SettingsInput::ThemeSelected(row.selected()));
                     },
@@ -238,7 +232,7 @@ impl SimpleComponent for Settings {
             interval_secs: init.refresh_interval.as_secs() as f64,
             notifications_enabled: init.notifications_enabled,
             start_minimized: init.start_minimized,
-            theme_mode: init.theme_mode,
+            theme_id: init.theme_id,
             status: init.status,
         };
 
@@ -253,12 +247,9 @@ impl SimpleComponent for Settings {
             SettingsInput::NotificationsToggled(enabled) => self.notifications_enabled = enabled,
             SettingsInput::StartMinimizedToggled(enabled) => self.start_minimized = enabled,
             SettingsInput::ThemeSelected(index) => {
-                let mode = THEME_CHOICES
-                    .get(index as usize)
-                    .copied()
-                    .unwrap_or(ThemeMode::System);
-                self.theme_mode = mode;
-                let _ = sender.output(SettingsOutput::ThemeChanged(mode));
+                let theme = theme::at_index(index);
+                self.theme_id = theme.id.to_string();
+                let _ = sender.output(SettingsOutput::ThemeChanged(theme));
             }
             SettingsInput::TestNotification => {
                 let _ = sender.output(SettingsOutput::TestNotification);
@@ -276,9 +267,9 @@ impl SimpleComponent for Settings {
 
 #[cfg(test)]
 mod tests {
-    use super::{theme_index, Settings};
+    use super::Settings;
     use crate::config::{RefreshInterval, MIN_REFRESH_INTERVAL_SECS};
-    use crate::state::ThemeMode;
+    use crate::theme::DEFAULT_THEME_ID;
 
     fn form(url: &str, interval_secs: f64) -> Settings {
         Settings {
@@ -286,7 +277,7 @@ mod tests {
             interval_secs,
             notifications_enabled: true,
             start_minimized: false,
-            theme_mode: ThemeMode::System,
+            theme_id: DEFAULT_THEME_ID.to_string(),
             status: String::new(),
         }
     }
@@ -330,9 +321,12 @@ mod tests {
     }
 
     #[test]
-    fn theme_index_matches_dropdown_order() {
-        assert_eq!(theme_index(ThemeMode::System), 0);
-        assert_eq!(theme_index(ThemeMode::Light), 1);
-        assert_eq!(theme_index(ThemeMode::Dark), 2);
+    fn saved_config_carries_the_selected_theme() {
+        let mut form = form("192.168.1.201", 30.0);
+        form.theme_id = "nord".to_string();
+
+        let config = form.validate().expect("form should be valid");
+
+        assert_eq!(config.theme, "nord");
     }
 }

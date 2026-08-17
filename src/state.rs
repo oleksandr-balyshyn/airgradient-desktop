@@ -1,8 +1,9 @@
 //! Shared UI vocabulary.
 //!
-//! Persisted settings live in `config.rs`, and everything else about the running
-//! app is held by the Relm4 component that owns it. What remains here are the two
-//! small enums more than one component needs to agree on.
+//! Persisted settings live in `config.rs`, colours in `theme.rs`, and everything
+//! else about the running app is held by the Relm4 component that owns it. What
+//! remains here is the page list, which the root component and the pages
+//! themselves both need to agree on.
 
 /// The pages the window can show.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -33,12 +34,4 @@ impl Page {
             Self::Help => "Help",
         }
     }
-}
-
-/// Whether to follow the desktop's light/dark preference or override it.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ThemeMode {
-    System,
-    Light,
-    Dark,
 }

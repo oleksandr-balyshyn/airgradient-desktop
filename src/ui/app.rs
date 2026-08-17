@@ -24,6 +24,7 @@ use relm4::{adw, gtk, prelude::*};
 use super::dashboard::{Dashboard, DashboardInput};
 use super::help::Help;
 use super::settings::{Settings, SettingsInit, SettingsInput, SettingsOutput};
+use super::theming;
 use super::tray::{self, TrayHandle};
 use super::welcome::{Welcome, WelcomeOutput};
 use crate::alerts::{AlertMonitor, AlertNotification, AlertSeverity};
@@ -32,7 +33,8 @@ use crate::config::{self, AppConfig, LoadedConfig};
 use crate::device::{fetch_current_measurements, DeviceBaseUrl};
 use crate::notifications::send_air_quality_notification;
 use crate::sensors::AirMeasureSnapshot;
-use crate::state::{Page, ThemeMode};
+use crate::state::Page;
+use crate::theme::{self, Theme};
 
 const DEFAULT_WIDTH: i32 = 1180;
 const DEFAULT_HEIGHT: i32 = 780;
@@ -57,8 +59,8 @@ pub enum AppInput {
     Quit,
     /// Persist a validated configuration from the settings page.
     SaveConfig(Box<AppConfig>),
-    /// Apply a light/dark/system preference immediately.
-    ThemeChanged(ThemeMode),
+    /// Preview a theme immediately, without saving it.
+    ThemeChanged(&'static Theme),
     /// Send a sample notification so the user can verify delivery.
     SendTestNotification,
 }
@@ -151,14 +153,6 @@ impl App {
         if let Err(err) = send_air_quality_notification(&relm4::main_adw_application(), alert) {
             eprintln!("System notification failed: {err}");
         }
-    }
-
-    fn apply_color_scheme(theme_mode: ThemeMode) {
-        adw::StyleManager::default().set_color_scheme(match theme_mode {
-            ThemeMode::System => adw::ColorScheme::Default,
-            ThemeMode::Light => adw::ColorScheme::ForceLight,
-            ThemeMode::Dark => adw::ColorScheme::ForceDark,
-        });
     }
 }
 
@@ -254,6 +248,10 @@ impl Component for App {
             startup_notice,
         } = loaded;
 
+        // Apply the saved theme before any widget exists, so the window is
+        // never painted in the wrong colours and then corrected.
+        theming::apply(theme::find(&config.theme));
+
         let dashboard = Dashboard::builder().launch(()).detach();
         let settings = Settings::builder()
             .launch(SettingsInit {
@@ -264,7 +262,7 @@ impl Component for App {
                 refresh_interval: config.refresh_interval,
                 notifications_enabled: config.notifications_enabled,
                 start_minimized: config.start_minimized,
-                theme_mode: ThemeMode::System,
+                theme_id: config.theme.clone(),
                 status: startup_notice.as_ref().map_or_else(
                     || "Enter a URL like http://192.168.1.201".to_string(),
                     |notice| notice.user_message(),
@@ -371,7 +369,7 @@ impl Component for App {
             }
             AppInput::HideWindow => root.set_visible(false),
             AppInput::Quit => relm4::main_application().quit(),
-            AppInput::ThemeChanged(mode) => Self::apply_color_scheme(mode),
+            AppInput::ThemeChanged(theme) => theming::apply(theme),
             AppInput::SendTestNotification => {
                 let result = send_air_quality_notification(
                     &relm4::main_adw_application(),

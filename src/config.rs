@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::device::DeviceBaseUrl;
+use crate::theme::DEFAULT_THEME_ID;
 
 pub const DEFAULT_REFRESH_INTERVAL_SECS: u64 = 30;
 pub const MIN_REFRESH_INTERVAL_SECS: u64 = 5;
@@ -106,6 +107,13 @@ pub struct AppConfig {
     /// Whether the app should start hidden and keep polling in the background.
     #[serde(default)]
     pub start_minimized: bool,
+    /// Identifier of the selected colour theme, as defined in `theme::THEMES`.
+    ///
+    /// Stored as a plain string rather than an enum so that a config file
+    /// naming a theme this build does not know about still loads; the lookup in
+    /// `theme::find` falls back to the default instead of refusing to start.
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 impl Default for AppConfig {
@@ -115,6 +123,7 @@ impl Default for AppConfig {
             refresh_interval: RefreshInterval::DEFAULT,
             notifications_enabled: default_notifications_enabled(),
             start_minimized: false,
+            theme: default_theme(),
         }
     }
 }
@@ -125,6 +134,10 @@ fn default_refresh_interval() -> RefreshInterval {
 
 fn default_notifications_enabled() -> bool {
     true
+}
+
+fn default_theme() -> String {
+    DEFAULT_THEME_ID.to_string()
 }
 
 #[derive(Debug)]

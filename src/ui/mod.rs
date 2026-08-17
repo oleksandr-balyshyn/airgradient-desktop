@@ -7,7 +7,8 @@
 //! * `dashboard` arranges the cards and splits a measurement between them,
 //! * `sensor_card`, `environment_card` and `aqi_card` render one reading each,
 //! * `settings`, `welcome` and `help` are the other pages,
-//! * `tray` bridges the StatusNotifier tray thread into the UI, and
+//! * `tray` bridges the StatusNotifier tray thread into the UI,
+//! * `theming` loads the selected theme's colours into GTK, and
 //! * `trend` and `status` are pure logic with no widgets, so they are testable.
 
 pub mod app;
@@ -18,6 +19,7 @@ mod help;
 mod sensor_card;
 mod settings;
 mod status;
+mod theming;
 mod tray;
 mod trend;
 mod welcome;
