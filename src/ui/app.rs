@@ -15,6 +15,7 @@
 //! timer bookkeeping at all — the next tick simply compares against the new
 //! interval.
 
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use relm4::adw::prelude::*;
@@ -23,6 +24,7 @@ use relm4::{adw, gtk, prelude::*};
 
 use super::dashboard::{Dashboard, DashboardInput};
 use super::help::Help;
+use super::history_view::{HistoryView, HistoryViewInput};
 use super::settings::{Settings, SettingsInit, SettingsInput, SettingsOutput};
 use super::theming;
 use super::tray::{self, TrayHandle};
@@ -36,6 +38,10 @@ use crate::notifications::send_air_quality_notification;
 use crate::sensors::AirMeasureSnapshot;
 use crate::state::Page;
 use crate::theme::{self, Theme};
+
+/// Names of the two top-level tabs inside the measurement view.
+const MAIN_TAB: &str = "main";
+const HISTORY_TAB: &str = "history";
 
 const DEFAULT_WIDTH: i32 = 1180;
 const DEFAULT_HEIGHT: i32 = 780;
@@ -86,6 +92,7 @@ pub struct App {
     history: History,
     alerts: AlertMonitor,
     dashboard: Controller<Dashboard>,
+    history_view: Controller<HistoryView>,
     settings: Controller<Settings>,
     /// Held only to keep the page alive; dropping a controller destroys its
     /// component and would leave an empty page behind in the stack.
@@ -184,9 +191,25 @@ impl Component for App {
                     add_css_class: "flat",
 
                     #[wrap(Some)]
-                    set_title_widget = &gtk::Label {
-                        set_label: APP_NAME,
-                        add_css_class: "title",
+                    set_title_widget = &gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_halign: gtk::Align::Center,
+
+                        // Tabs are only meaningful on the measurement pages, so
+                        // Settings, Help and onboarding show the app name instead.
+                        adw::ViewSwitcher {
+                            set_stack: Some(view_stack),
+                            set_policy: adw::ViewSwitcherPolicy::Wide,
+                            #[watch]
+                            set_visible: model.page == Page::Dashboard,
+                        },
+
+                        gtk::Label {
+                            set_label: APP_NAME,
+                            add_css_class: "title",
+                            #[watch]
+                            set_visible: model.page != Page::Dashboard,
+                        },
                     },
 
                     pack_start = &gtk::Button {
@@ -221,7 +244,6 @@ impl Component for App {
                 },
 
                 #[wrap(Some)]
-                #[name = "shell"]
                 set_content = &gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
                     set_margin_all: 12,
@@ -256,6 +278,7 @@ impl Component for App {
         theming::apply(theme::find(&config.theme));
 
         let dashboard = Dashboard::builder().launch(()).detach();
+        let history_view = HistoryView::builder().launch(()).detach();
         let settings = Settings::builder()
             .launch(SettingsInit {
                 server_url: config
@@ -284,11 +307,28 @@ impl Component for App {
                 });
         let help = Help::builder().launch(()).detach();
 
-        // The stack is assembled here rather than in `view!` because each page
-        // needs a stable name to switch to, and those names come from `Page`.
+        // The two top-level tabs. `ViewStack` rather than `gtk::Stack` because it
+        // is what an `AdwViewSwitcher` binds to, giving the header the standard
+        // GNOME tab control for free.
+        let view_stack = adw::ViewStack::new();
+        view_stack.add_titled_with_icon(
+            dashboard.widget(),
+            Some(MAIN_TAB),
+            "Main",
+            "view-grid-symbolic",
+        );
+        view_stack.add_titled_with_icon(
+            history_view.widget(),
+            Some(HISTORY_TAB),
+            "History",
+            "document-open-recent-symbolic",
+        );
+
+        // The outer stack is assembled here rather than in `view!` because each
+        // page needs a stable name to switch to, and those names come from `Page`.
         let stack = gtk::Stack::new();
         stack.add_named(welcome.widget(), Some(Page::Welcome.id()));
-        stack.add_named(dashboard.widget(), Some(Page::Dashboard.id()));
+        stack.add_named(&view_stack, Some(Page::Dashboard.id()));
         stack.add_named(settings.widget(), Some(Page::Settings.id()));
         stack.add_named(help.widget(), Some(Page::Help.id()));
 
@@ -306,6 +346,7 @@ impl Component for App {
             history: History::load(),
             alerts: AlertMonitor::new(config.notifications_enabled),
             dashboard,
+            history_view,
             settings,
             _welcome: welcome,
             _help: help,
@@ -321,6 +362,7 @@ impl Component for App {
                 .dashboard
                 .emit(DashboardInput::Show(Box::new(latest.clone())));
         }
+        model.publish_history();
 
         model.dashboard.emit(DashboardInput::SetServerUrl(
             config
@@ -353,10 +395,8 @@ impl Component for App {
         }
 
         let stack = &stack;
+        let view_stack = &view_stack;
         let widgets = view_output!();
-
-        track_dark_shell(&widgets.shell);
-
         ComponentParts { model, widgets }
     }
 
@@ -437,6 +477,17 @@ impl Component for App {
 }
 
 impl App {
+    /// Hand the recorded history to both views.
+    ///
+    /// One allocation is shared between them: a day of readings copied twice per
+    /// refresh would be pure waste.
+    fn publish_history(&self) {
+        let snapshots = Rc::new(self.history.snapshots());
+        self.dashboard
+            .emit(DashboardInput::ShowHistory(Rc::clone(&snapshots)));
+        self.history_view.emit(HistoryViewInput::Show(snapshots));
+    }
+
     /// Add a reading to the history and write it out.
     ///
     /// A failed write is reported but not surfaced in the UI: losing recorded
@@ -448,6 +499,8 @@ impl App {
         if let Err(err) = self.history.save() {
             eprintln!("Could not save measurement history: {err}");
         }
+
+        self.publish_history();
     }
 
     /// Persist a validated configuration and apply it to the running app.
@@ -488,30 +541,6 @@ impl App {
             }
         }
     }
-}
-
-/// Keep the shell's dark-mode class in sync with the active color scheme.
-///
-/// libadwaita already restyles its own widgets when the desktop switches between
-/// light and dark. This class exists only for the app's custom dashboard
-/// background, which needs to be a little darker in dark mode. Following
-/// `StyleManager` rather than the user's menu choice means it is also correct
-/// when the *system* theme changes while the app is running.
-fn track_dark_shell(shell: &gtk::Box) {
-    fn apply(shell: &gtk::Box, is_dark: bool) {
-        if is_dark {
-            shell.add_css_class("dark-app-shell");
-        } else {
-            shell.remove_css_class("dark-app-shell");
-        }
-    }
-
-    let style_manager = adw::StyleManager::default();
-    apply(shell, style_manager.is_dark());
-    style_manager.connect_dark_notify({
-        let shell = shell.clone();
-        move |style_manager| apply(&shell, style_manager.is_dark())
-    });
 }
 
 /// Register the application-level actions used outside the window.

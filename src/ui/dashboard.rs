@@ -5,11 +5,15 @@
 //! readings (value, unit, status class, trend) and hand each card its own slice.
 //! The cards themselves know nothing about AirGradient payloads or thresholds.
 
+use std::rc::Rc;
+
 use relm4::gtk::prelude::*;
 use relm4::{gtk, prelude::*};
 
 use super::aqi_card::{AqiCard, AqiCardInput};
 use super::environment_card::{EnvironmentCard, EnvironmentCardInput, EnvironmentKind};
+use super::metric_card::{MetricCard, MetricCardInit, MetricCardInput};
+use super::metrics::{self, PM25_ID};
 use super::sensor_card::{CardSize, Reading, SensorCard, SensorCardInit, SensorCardInput};
 use super::status::class_for;
 use super::trend::Trend;
@@ -23,6 +27,12 @@ use crate::sensors::{AirMeasureSnapshot, GasUnit};
 fn gas_unit_label(unit: Option<GasUnit>) -> &'static str {
     unit.unwrap_or(GasUnit::Index).as_str()
 }
+
+/// Height of the PM2.5 history chart on the main view.
+///
+/// Taller than the history tab's charts because this one is the only chart on the
+/// page and has the room.
+const PM25_CHART_HEIGHT: i32 = 132;
 
 /// Fixed accent for readings that have no health thresholds to classify against.
 ///
@@ -39,6 +49,8 @@ pub enum DashboardInput {
     SetServerUrl(Option<String>),
     /// Text for the status line under the cards.
     SetStatus(String),
+    /// Recorded readings for the PM2.5 chart, oldest first.
+    ShowHistory(Rc<Vec<AirMeasureSnapshot>>),
 }
 
 pub struct Dashboard {
@@ -52,6 +64,8 @@ pub struct Dashboard {
     pm1: Controller<SensorCard>,
     pm25: Controller<SensorCard>,
     pm10: Controller<SensorCard>,
+    /// PM2.5 over time, the one chart on the main view.
+    pm25_history: Controller<MetricCard>,
     /// The previous snapshot, kept only to compute trend arrows.
     previous: Option<AirMeasureSnapshot>,
     server_text: String,
@@ -269,6 +283,9 @@ impl SimpleComponent for Dashboard {
                             pm10_widget -> gtk::Box {},
                         },
 
+                        #[local_ref]
+                        pm25_history_widget -> gtk::Box {},
+
                         gtk::Label {
                             #[watch]
                             set_label: model.status_text.as_str(),
@@ -328,6 +345,12 @@ impl SimpleComponent for Dashboard {
             pm10: SensorCard::builder()
                 .launch(particle_card("PM₁₀", "µg/m³"))
                 .detach(),
+            pm25_history: MetricCard::builder()
+                .launch(MetricCardInit {
+                    metric: metrics::find(PM25_ID),
+                    chart_height: PM25_CHART_HEIGHT,
+                })
+                .detach(),
             previous: None,
             server_text: "Server URL: Not configured".to_string(),
             status_text: "Press refresh to load current measurements.".to_string(),
@@ -343,6 +366,7 @@ impl SimpleComponent for Dashboard {
         let pm1_widget = model.pm1.widget();
         let pm25_widget = model.pm25.widget();
         let pm10_widget = model.pm10.widget();
+        let pm25_history_widget = model.pm25_history.widget();
 
         let widgets = view_output!();
         ComponentParts { model, widgets }
@@ -362,6 +386,14 @@ impl SimpleComponent for Dashboard {
                 };
             }
             DashboardInput::SetStatus(status) => self.status_text = status,
+            DashboardInput::ShowHistory(snapshots) => {
+                let metric = metrics::find(PM25_ID);
+                self.pm25_history.emit(MetricCardInput::Show {
+                    current: snapshots.last().and_then(|snapshot| metric.value(snapshot)),
+                    unit: None,
+                    series: metric.series(&snapshots),
+                });
+            }
         }
     }
 }

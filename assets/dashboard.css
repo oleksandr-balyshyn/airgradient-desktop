@@ -1,47 +1,31 @@
 /*
  * Dashboard styling.
  *
- * Libadwaita provides the base application theme. This file styles only the
- * custom dashboard cards and a small amount of app shell chrome. Colors are
- * from the GNOME palette where possible.
+ * libadwaita provides the base application theme, and `theme.rs` overrides its
+ * named colours per theme. This file styles only the custom cards and charts, and
+ * it does so in terms of those named colours — @card_fg_color, @window_bg_color
+ * and so on — never literal greys. That is what lets all 57 themes work: the
+ * cards follow whichever palette is active without knowing which one it is.
+ *
+ * The exceptions are deliberate. Air-quality status colours (green through red)
+ * and trend colours come from the GNOME palette and are fixed, because "red"
+ * has to mean "bad air" in every theme.
  */
 
-/* Keep the manually composed header visually flat against the app shell. */
-.flat-header {
-  background: @window_bg_color;
-  border-bottom-style: none;
-  border-bottom-width: 0;
-  box-shadow: none;
-}
-
-/* The app shell is the root widget created in `ui/app.rs`. */
 .app-shell {
   background: @window_bg_color;
-}
-
-/* Dark mode gets a slightly deeper background than libadwaita's default. */
-.app-shell.dark-app-shell {
-  background: #17151f;
-}
-
-.dark-app-shell .flat-header {
-  background: #17151f;
-}
-
-.dark-app-shell .dashboard-page {
-  background: #17151f;
 }
 
 .dashboard-page {
   background: transparent;
 }
 
-/* Shared card geometry. Individual rows can override minimum sizes below. */
+/* Shared card geometry. Individual rows override minimum sizes below. */
 .sensor-card,
 .metric-card,
-.aqi-card {
+.aqi-card,
+.history-card {
   border-radius: 12px;
-  color: #3d3846;
   padding: 20px;
 }
 
@@ -71,7 +55,7 @@
   min-height: 184px;
 }
 
-/* Width variants used by dashboard.rs to keep row layouts compact. */
+/* Width variants used by the gas and particulate rows. */
 .compact-sensor-card {
   min-width: 96px;
   padding: 10px;
@@ -82,12 +66,19 @@
   padding: 12px;
 }
 
+/* History cards are wider than tall: a heading, a chart, and a summary line. */
+.history-card {
+  min-height: 132px;
+  min-width: 260px;
+  padding: 16px;
+}
+
 /* Symbolic icons inherit `color`; GTK recolors SVGs with currentColor. */
 .metric-icon,
 .aqi-icon {
   border-radius: 999px;
   background: transparent;
-  color: #3d3846;
+  color: @card_fg_color;
 }
 
 .metric-icon {
@@ -97,7 +88,8 @@
 
 .dashboard-top .metric-icon,
 .narrow-sensor-card .metric-icon,
-.compact-sensor-card .metric-icon {
+.compact-sensor-card .metric-icon,
+.history-card .metric-icon {
   min-width: 36px;
   min-height: 36px;
 }
@@ -107,15 +99,17 @@
   min-height: 84px;
 }
 
-/* Explicit text colors keep light-theme cards readable on pale gradients. */
-.dashboard-page .sensor-card label,
-.dashboard-page .metric-card label,
-.dashboard-page .aqi-card label {
-  color: #3d3846;
+/* Card text follows the theme's card foreground in every theme, light or dark. */
+.sensor-card label,
+.metric-card label,
+.aqi-card label,
+.history-card label,
+.metric-title,
+.aqi-level {
+  color: @card_fg_color;
 }
 
 .metric-title {
-  color: #3d3846;
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0;
@@ -123,7 +117,6 @@
 
 .metric-value,
 .large-value {
-  color: #241f31;
   font-size: 30px;
   font-weight: 700;
   line-height: 1.05;
@@ -139,10 +132,7 @@
 
 .narrow-sensor-card .metric-title,
 .narrow-sensor-card .metric-unit,
-.narrow-sensor-card .trend-value {
-  font-size: 11px;
-}
-
+.narrow-sensor-card .trend-value,
 .compact-sensor-card .metric-title,
 .compact-sensor-card .metric-unit,
 .compact-sensor-card .trend-value {
@@ -150,62 +140,40 @@
 }
 
 .aqi-value {
-  color: #241f31;
   font-size: 56px;
   font-weight: 800;
   line-height: 0.95;
 }
 
 .aqi-level {
-  color: #3d3846;
   font-size: 18px;
   font-weight: 700;
 }
 
-.metric-unit {
-  color: #5e5c64;
-  font-size: 12px;
+.history-value {
+  font-size: 20px;
+  font-weight: 700;
 }
 
+/* Secondary text: the same colour as the rest of the card, held back a little
+ * so units and captions read as supporting detail. */
+.metric-unit,
 .trend-context {
-  color: #5e5c64;
+  color: alpha(@card_fg_color, 0.7);
   font-size: 12px;
-}
-
-/* In dark mode the same widgets sit on darker card surfaces, so text needs a
- * separate brighter palette. These rules are intentionally scoped to the app
- * shell class toggled from `ui/app.rs`; light mode keeps the dark-gray text
- * above for contrast on pale cards. */
-.dark-app-shell .sensor-card,
-.dark-app-shell .metric-card,
-.dark-app-shell .aqi-card,
-.dark-app-shell .metric-title,
-.dark-app-shell .aqi-level,
-.dark-app-shell .dashboard-page .sensor-card label,
-.dark-app-shell .dashboard-page .metric-card label,
-.dark-app-shell .dashboard-page .aqi-card label {
-  color: #f6f5f4;
-}
-
-.dark-app-shell .metric-value,
-.dark-app-shell .large-value,
-.dark-app-shell .aqi-value {
-  color: #ffffff;
-}
-
-.dark-app-shell .metric-unit,
-.dark-app-shell .trend-context {
-  color: #deddda;
-}
-
-.dark-app-shell .metric-icon,
-.dark-app-shell .aqi-icon {
-  color: #f6f5f4;
 }
 
 .trend-value {
   font-size: 12px;
   font-weight: 700;
+}
+
+/* Charts inherit `color`, which is what the Cairo drawing code reads, so a chart
+ * line is always the current theme's card foreground. */
+.chart {
+  color: alpha(@card_fg_color, 0.85);
+  margin-top: 2px;
+  margin-bottom: 2px;
 }
 
 /* Trend colors: lower pollutant/AQI values are improvement, higher are worse. */
@@ -218,7 +186,7 @@
 }
 
 .trend-neutral {
-  color: #77767b;
+  color: alpha(@card_fg_color, 0.6);
 }
 
 /* The status dot is a plain 8x8 box; its color comes from the card's status
@@ -249,7 +217,8 @@
   background-color: #ed333b;
 }
 
-/* Soft card gradients. These are intentionally subtle to stay GNOME-like. */
+/* Soft card gradients. These are translucent so they tint the theme's own card
+ * colour rather than replacing it, and stay GNOME-like in light and dark alike. */
 .temperature-widget {
   background-image: linear-gradient(135deg, rgba(153, 193, 241, 0.20), rgba(53, 132, 228, 0.08));
 }

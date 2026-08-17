@@ -4,7 +4,11 @@
 //! the window and is the only component that performs I/O. The rest are pure
 //! views driven by messages:
 //!
-//! * `dashboard` arranges the cards and splits a measurement between them,
+//! * `dashboard` is the Main tab: it arranges the cards and splits a measurement
+//!   between them,
+//! * `history_view` is the History tab, one `metric_card` per metric,
+//! * `metrics` is the table of what the app measures, shared by both tabs,
+//! * `chart` draws a series of readings with Cairo,
 //! * `sensor_card`, `environment_card` and `aqi_card` render one reading each,
 //! * `settings`, `welcome` and `help` are the other pages,
 //! * `tray` bridges the StatusNotifier tray thread into the UI,
@@ -13,9 +17,13 @@
 
 pub mod app;
 mod aqi_card;
+mod chart;
 mod dashboard;
 mod environment_card;
 mod help;
+mod history_view;
+mod metric_card;
+mod metrics;
 mod sensor_card;
 mod settings;
 mod status;
