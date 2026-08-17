@@ -16,7 +16,13 @@ use super::trend::Trend;
 use crate::sensors::thresholds::{
     co2_status_color, nox_status_color, pm25_status_color, tvoc_status_color,
 };
-use crate::sensors::AirMeasureSnapshot;
+use crate::sensors::{AirMeasureSnapshot, GasUnit};
+
+/// Unit label for a gas reading, defaulting to the sensor index used by
+/// AirGradient's own firmware when a payload did not say.
+fn gas_unit_label(unit: Option<GasUnit>) -> &'static str {
+    unit.unwrap_or(GasUnit::Index).as_str()
+}
 
 /// Fixed accent for readings that have no health thresholds to classify against.
 ///
@@ -82,10 +88,10 @@ impl Dashboard {
             ),
         }));
 
-        let tvoc_unit = snapshot.tvoc_unit.unwrap_or("index");
+        let tvoc_unit = gas_unit_label(snapshot.tvoc_unit);
         self.tvoc.emit(SensorCardInput::Show(Reading {
             value: snapshot.tvoc,
-            unit: snapshot.tvoc_unit.map(str::to_string),
+            unit: Some(tvoc_unit.to_string()),
             status_class: class_for(snapshot.tvoc, tvoc_status_color),
             trend: Trend::between(
                 snapshot.tvoc,
@@ -95,10 +101,10 @@ impl Dashboard {
             ),
         }));
 
-        let nox_unit = snapshot.nox_unit.unwrap_or("index");
+        let nox_unit = gas_unit_label(snapshot.nox_unit);
         self.nox.emit(SensorCardInput::Show(Reading {
             value: snapshot.nox,
-            unit: snapshot.nox_unit.map(str::to_string),
+            unit: Some(nox_unit.to_string()),
             status_class: class_for(snapshot.nox, nox_status_color),
             trend: Trend::between(
                 snapshot.nox,

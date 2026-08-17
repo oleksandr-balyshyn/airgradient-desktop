@@ -4,23 +4,53 @@
 //! hardware model and firmware. The parser accepts several candidate keys for
 //! each measurement and returns a normalized `AirMeasureSnapshot` for the UI.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// Unit a gas sensor reports in.
+///
+/// AirGradient's own firmware exposes VOC and NOx as a unitless SGP sensor
+/// *index*, while some compatible local-server implementations report a
+/// concentration in parts per billion. The reading means different things in
+/// each case, so the unit travels with the value instead of being guessed at
+/// display time.
+///
+/// This is an enum rather than a `&'static str` because snapshots are written to
+/// the history file, and a borrowed string cannot be deserialized back.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GasUnit {
+    /// Unitless sensor index.
+    Index,
+    /// Parts per billion.
+    Ppb,
+}
+
+impl GasUnit {
+    /// Short label shown on a card.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Index => "index",
+            Self::Ppb => "ppb",
+        }
+    }
+}
 
 /// One parsed measurement response from `/measures/current`.
 ///
 /// Every sensor value is optional because not all AirGradient models expose the
 /// same fields. In the UI, `None` is displayed as `--`; it is not treated as
 /// zero because zero can be a valid real measurement.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AirMeasureSnapshot {
     pub temperature: Option<f32>,
     pub humidity: Option<f32>,
     pub aqi: Option<f32>,
     pub co2: Option<f32>,
     pub nox: Option<f32>,
-    pub nox_unit: Option<&'static str>,
+    pub nox_unit: Option<GasUnit>,
     pub tvoc: Option<f32>,
-    pub tvoc_unit: Option<&'static str>,
+    pub tvoc_unit: Option<GasUnit>,
     pub pm1: Option<f32>,
     pub pm25: Option<f32>,
     pub pm10: Option<f32>,
@@ -33,23 +63,11 @@ pub fn parse_air_measurements(raw: &Value) -> AirMeasureSnapshot {
     // with compatible local-server implementations.
     let nox = extract_measurement_value(raw, &["nox", "no2", "nox_ppb"])
         .or_else(|| extract_measurement_value(raw, &["noxIndex", "nox_index"]));
-    let nox_unit = if nox.is_none() {
-        None
-    } else if has_any_key(raw, &["noxIndex", "nox_index"]) {
-        Some("index")
-    } else {
-        Some("ppb")
-    };
+    let nox_unit = gas_unit(nox, raw, &["noxIndex", "nox_index"]);
 
     let tvoc = extract_measurement_value(raw, &["tvoc", "tvoc_ppb", "tvoc_ppm", "voc"])
         .or_else(|| extract_measurement_value(raw, &["tvocIndex", "tvoc_index"]));
-    let tvoc_unit = if tvoc.is_none() {
-        None
-    } else if has_any_key(raw, &["tvocIndex", "tvoc_index"]) {
-        Some("index")
-    } else {
-        Some("ppb")
-    };
+    let tvoc_unit = gas_unit(tvoc, raw, &["tvocIndex", "tvoc_index"]);
     let pm25 = extract_measurement_value(raw, &["pm02", "pm2_5", "pm25", "pm2.5"]);
 
     AirMeasureSnapshot {
@@ -95,6 +113,21 @@ pub fn parse_air_measurements(raw: &Value) -> AirMeasureSnapshot {
         pm10: extract_measurement_value(raw, &["pm10", "pm10_0"]),
         pm003_count: extract_measurement_value(raw, &["pm003Count", "pm003_count", "pm0_3_count"]),
     }
+}
+
+/// Decide which unit a gas reading is in.
+///
+/// If the payload used one of the `*Index` key names the value is an index;
+/// anything else is treated as a concentration in ppb. A missing reading has no
+/// unit at all.
+fn gas_unit(value: Option<f32>, raw: &Value, index_keys: &[&str]) -> Option<GasUnit> {
+    value.map(|_| {
+        if has_any_key(raw, index_keys) {
+            GasUnit::Index
+        } else {
+            GasUnit::Ppb
+        }
+    })
 }
 
 /// Return the first numeric value found under any candidate key.
@@ -207,7 +240,7 @@ fn pm25_to_us_aqi(pm25: f32) -> f32 {
 mod tests {
     use serde_json::json;
 
-    use super::parse_air_measurements;
+    use super::{parse_air_measurements, GasUnit};
 
     #[test]
     fn parses_airgradient_local_server_payload() {
@@ -239,9 +272,9 @@ mod tests {
         assert_eq!(snapshot.temperature, Some(24.47));
         assert_eq!(snapshot.humidity, Some(49.0));
         assert_eq!(snapshot.tvoc, Some(100.0));
-        assert_eq!(snapshot.tvoc_unit, Some("index"));
+        assert_eq!(snapshot.tvoc_unit, Some(GasUnit::Index));
         assert_eq!(snapshot.nox, Some(1.0));
-        assert_eq!(snapshot.nox_unit, Some("index"));
+        assert_eq!(snapshot.nox_unit, Some(GasUnit::Index));
         assert_eq!(snapshot.aqi.map(|value| value.round()), Some(29.0));
     }
 
@@ -272,9 +305,9 @@ mod tests {
         assert_eq!(snapshot.temperature, Some(22.4));
         assert_eq!(snapshot.humidity, Some(45.5));
         assert_eq!(snapshot.tvoc, Some(110.0));
-        assert_eq!(snapshot.tvoc_unit, Some("index"));
+        assert_eq!(snapshot.tvoc_unit, Some(GasUnit::Index));
         assert_eq!(snapshot.nox, Some(3.0));
-        assert_eq!(snapshot.nox_unit, Some("index"));
+        assert_eq!(snapshot.nox_unit, Some(GasUnit::Index));
         assert_eq!(snapshot.pm003_count, Some(1200.0));
     }
 }
