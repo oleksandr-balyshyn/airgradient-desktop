@@ -31,6 +31,7 @@ use crate::alerts::{AlertMonitor, AlertNotification, AlertSeverity};
 use crate::app_info::APP_NAME;
 use crate::config::{self, AppConfig, LoadedConfig};
 use crate::device::{fetch_current_measurements, DeviceBaseUrl};
+use crate::history::{History, Sample};
 use crate::notifications::send_air_quality_notification;
 use crate::sensors::AirMeasureSnapshot;
 use crate::state::Page;
@@ -81,6 +82,8 @@ pub struct App {
     /// Ticks counted since the last fetch was started.
     seconds_since_fetch: u64,
     last_updated: Option<Instant>,
+    /// Recorded measurements, kept across restarts.
+    history: History,
     alerts: AlertMonitor,
     dashboard: Controller<Dashboard>,
     settings: Controller<Settings>,
@@ -300,6 +303,7 @@ impl Component for App {
             refresh_interval_secs: config.refresh_interval.as_secs(),
             seconds_since_fetch: 0,
             last_updated: None,
+            history: History::load(),
             alerts: AlertMonitor::new(config.notifications_enabled),
             dashboard,
             settings,
@@ -308,6 +312,15 @@ impl Component for App {
             _hold: relm4::main_application().hold(),
             _tray: tray::install(sender.input_sender().clone()),
         };
+
+        // Showing the last recorded reading straight away means the dashboard is
+        // populated while the first fetch is still in flight, instead of showing
+        // a screen full of dashes for a second or two.
+        if let Some(latest) = model.history.latest() {
+            model
+                .dashboard
+                .emit(DashboardInput::Show(Box::new(latest.clone())));
+        }
 
         model.dashboard.emit(DashboardInput::SetServerUrl(
             config
@@ -406,6 +419,7 @@ impl Component for App {
             }
             AppCommand::Fetched(Ok(snapshot)) => {
                 self.last_updated = Some(Instant::now());
+                self.record(snapshot.as_ref().clone());
                 for alert in self.alerts.evaluate(&snapshot) {
                     Self::deliver(alert);
                 }
@@ -423,6 +437,19 @@ impl Component for App {
 }
 
 impl App {
+    /// Add a reading to the history and write it out.
+    ///
+    /// A failed write is reported but not surfaced in the UI: losing recorded
+    /// history is not worth interrupting someone who is looking at live air
+    /// quality, and the next successful write recovers everything still in memory.
+    fn record(&mut self, snapshot: AirMeasureSnapshot) {
+        self.history.push(Sample::now(snapshot));
+
+        if let Err(err) = self.history.save() {
+            eprintln!("Could not save measurement history: {err}");
+        }
+    }
+
     /// Persist a validated configuration and apply it to the running app.
     fn save_config(&mut self, config: AppConfig, sender: &ComponentSender<Self>) {
         if let Err(err) = config::write_config(&config) {

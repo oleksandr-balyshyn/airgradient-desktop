@@ -8,6 +8,7 @@ pub mod app;
 pub mod app_info;
 pub mod config;
 pub mod device;
+pub mod history;
 pub mod notifications;
 pub mod sensors;
 pub mod state;
