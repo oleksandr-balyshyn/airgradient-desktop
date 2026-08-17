@@ -1,287 +1,338 @@
-//! Settings page construction and persistence callbacks.
+//! Settings page.
+//!
+//! The page keeps its own copy of every editable value in the model, updated by
+//! one input message per widget. Nothing reads a widget back out at save time,
+//! which means "what the user typed" and "what gets validated" can never drift
+//! apart, and the validation logic is reachable from a test.
+//!
+//! Saving is not done here. The page validates the input and emits
+//! `SettingsOutput::Save` with a ready-to-persist `AppConfig`; the root component
+//! owns writing the file and restarting the refresh timer.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use relm4::adw::prelude::*;
+use relm4::{adw, gtk, prelude::*};
 
-use adw::{prelude::*, ActionRow, ComboRow, EntryRow, PreferencesGroup, PreferencesPage, SpinRow};
-use gtk4::{Align, Button, Image, StringList, Switch};
-
-use super::app::{
-    apply_color_scheme, start_auto_refresh_timer, theme_mode_index, NavigationContext,
+use crate::config::{
+    AppConfig, RefreshInterval, MAX_REFRESH_INTERVAL_SECS, MIN_REFRESH_INTERVAL_SECS,
 };
-use crate::{
-    alerts::{AlertNotification, AlertSeverity},
-    config::{
-        self, AppConfig, RefreshInterval, MAX_REFRESH_INTERVAL_SECS, MIN_REFRESH_INTERVAL_SECS,
-    },
-    device::DeviceBaseUrl,
-    notifications::send_air_quality_notification,
-    state::{Page, ThemeMode},
-};
+use crate::device::DeviceBaseUrl;
+use crate::state::ThemeMode;
 
-pub(super) fn build_settings_page(
-    navigation: NavigationContext,
-    auto_refresh_source: Rc<RefCell<Option<glib::SourceId>>>,
-) -> gtk4::Widget {
-    let page = PreferencesPage::builder()
-        .title("Settings")
-        .icon_name("preferences-system-symbolic")
-        .build();
+/// What the settings page needs to render its initial values.
+#[derive(Debug, Clone)]
+pub struct SettingsInit {
+    pub server_url: Option<String>,
+    pub refresh_interval: RefreshInterval,
+    pub notifications_enabled: bool,
+    pub start_minimized: bool,
+    pub theme_mode: ThemeMode,
+    /// Message explaining why defaults were loaded, if anything went wrong.
+    pub status: String,
+}
 
-    let theme_options = StringList::new(&["System", "Light", "Dark"]);
-    let current_mode = navigation.ui.state.borrow().theme_mode;
-    let theme_row = ComboRow::builder()
-        .title("Style")
-        .subtitle("Use the system preference or force a light or dark appearance")
-        .model(&theme_options)
-        .selected(theme_mode_index(current_mode))
-        .build();
-    theme_row.connect_selected_notify({
-        let style_manager = adw::StyleManager::default();
-        let state = navigation.ui.state.clone();
-        move |row| {
-            let theme_mode = match row.selected() {
-                1 => ThemeMode::Light,
-                2 => ThemeMode::Dark,
-                _ => ThemeMode::System,
-            };
-            {
-                let mut model = state.borrow_mut();
-                model.theme_mode = theme_mode;
-            }
-            // Theme changes apply immediately. They are not persisted yet; the
-            // current app state is enough for this session.
-            apply_color_scheme(&style_manager, theme_mode);
-        }
-    });
+#[derive(Debug)]
+pub enum SettingsInput {
+    UrlChanged(String),
+    IntervalChanged(f64),
+    NotificationsToggled(bool),
+    StartMinimizedToggled(bool),
+    ThemeSelected(u32),
+    TestNotification,
+    Save,
+    /// Replace the status line, used by the root component to report results.
+    SetStatus(String),
+}
 
-    let url_row = EntryRow::builder()
-        .title("Local-server Base URL")
-        .text(
-            navigation
-                .ui
-                .state
-                .borrow()
-                .server_url()
-                .unwrap_or_default(),
-        )
-        .build();
-    let url_icon = Image::from_icon_name("network-wired-symbolic");
-    url_row.add_prefix(&url_icon);
+#[derive(Debug)]
+pub enum SettingsOutput {
+    /// The user saved a valid configuration.
+    Save(Box<AppConfig>),
+    /// The user picked a different appearance. Applied immediately, not saved.
+    ThemeChanged(ThemeMode),
+    /// The user asked for a sample notification.
+    TestNotification,
+}
 
-    let refresh_row = SpinRow::with_range(MIN_REFRESH_INTERVAL_SECS as f64, 3600.0, 1.0);
-    refresh_row.set_title("Refresh Interval");
-    refresh_row.set_subtitle("Seconds between automatic measurement updates");
-    refresh_row.set_value(navigation.ui.state.borrow().refresh_interval.as_secs() as f64);
-    refresh_row.set_numeric(true);
-    refresh_row.set_tooltip_text(Some(
-        "Refresh interval in seconds. Minimum value is 5 seconds.",
-    ));
+pub struct Settings {
+    url_text: String,
+    interval_secs: f64,
+    notifications_enabled: bool,
+    start_minimized: bool,
+    theme_mode: ThemeMode,
+    status: String,
+}
 
-    let notifications_row = ActionRow::builder()
-        .title("Air Quality Notifications")
-        .subtitle("Notify when CO2, AQI, particles, VOC, NOx, or humidity need attention")
-        .build();
-    let notifications_switch = Switch::builder()
-        .valign(Align::Center)
-        .active(navigation.ui.state.borrow().notifications_enabled)
-        .build();
-    notifications_row.add_suffix(&notifications_switch);
-    notifications_row.set_activatable_widget(Some(&notifications_switch));
+impl Settings {
+    /// Turn the current form contents into a config, or explain what is wrong.
+    ///
+    /// The user types a loose string such as `192.168.1.201`, while the config
+    /// file stores a normalized base URL such as `http://192.168.1.201`. Doing
+    /// that conversion here means the fetch code never has to guess, and an
+    /// unusable value is never written to disk.
+    fn validate(&self) -> Result<AppConfig, String> {
+        let server_url =
+            DeviceBaseUrl::parse(&self.url_text).map_err(|err| format!("Invalid URL: {err}"))?;
 
-    let start_minimized_row = ActionRow::builder()
-        .title("Start Minimized")
-        .subtitle("Start hidden and keep polling in the background on next launch")
-        .build();
-    let start_minimized_switch = Switch::builder()
-        .valign(Align::Center)
-        .active(navigation.ui.state.borrow().start_minimized)
-        .build();
-    start_minimized_row.add_suffix(&start_minimized_switch);
-    start_minimized_row.set_activatable_widget(Some(&start_minimized_switch));
+        let seconds = (self.interval_secs.round() as u64)
+            .clamp(MIN_REFRESH_INTERVAL_SECS, MAX_REFRESH_INTERVAL_SECS);
+        let refresh_interval =
+            RefreshInterval::new(seconds).map_err(|err| format!("Invalid interval: {err}"))?;
 
-    let test_notification_row = ActionRow::builder()
-        .title("Test Notification")
-        .subtitle("Send a sample alert and test click-to-open behavior")
-        .build();
-    let test_notification_button = Button::builder()
-        .label("Send")
-        .valign(Align::Center)
-        .build();
-    test_notification_button.add_css_class("suggested-action");
-    test_notification_row.add_suffix(&test_notification_button);
-    test_notification_row.set_activatable_widget(Some(&test_notification_button));
-    test_notification_button.connect_clicked({
-        let app = navigation.ui.app.clone();
-        let test_notification_row = test_notification_row.clone();
-        move |_| {
-            let result = send_air_quality_notification(
-                &app,
-                AlertNotification {
-                    id: "airgradient-test-notification".into(),
-                    title: "Air Monitor test notification".into(),
-                    body:
-                        "Notifications are working. Click this notification to open the dashboard."
-                            .into(),
-                    severity: AlertSeverity::Notice,
+        Ok(AppConfig {
+            server_url,
+            refresh_interval,
+            notifications_enabled: self.notifications_enabled,
+            start_minimized: self.start_minimized,
+        })
+    }
+}
+
+/// Order of the entries in the appearance dropdown.
+const THEME_CHOICES: [ThemeMode; 3] = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark];
+
+/// Index of a theme mode in the dropdown.
+fn theme_index(mode: ThemeMode) -> u32 {
+    THEME_CHOICES
+        .iter()
+        .position(|choice| *choice == mode)
+        .unwrap_or(0) as u32
+}
+
+#[relm4::component(pub)]
+impl SimpleComponent for Settings {
+    type Init = SettingsInit;
+    type Input = SettingsInput;
+    type Output = SettingsOutput;
+
+    view! {
+        adw::PreferencesPage {
+            set_title: "Settings",
+            set_icon_name: Some("preferences-system-symbolic"),
+
+            adw::PreferencesGroup {
+                set_title: "Appearance",
+                set_description: Some("GNOME apps should follow the system style by default."),
+
+                adw::ComboRow {
+                    set_title: "Style",
+                    set_subtitle: "Use the system preference or force a light or dark appearance",
+                    set_model: Some(&gtk::StringList::new(&["System", "Light", "Dark"])),
+                    set_selected: theme_index(model.theme_mode),
+                    connect_selected_notify[sender] => move |row| {
+                        sender.input(SettingsInput::ThemeSelected(row.selected()));
+                    },
                 },
-            );
-            match result {
-                Ok(()) => test_notification_row.set_subtitle("Test notification sent."),
-                Err(err) => {
-                    test_notification_row.set_subtitle(&format!("Test notification failed: {err}"))
-                }
-            }
+            },
+
+            adw::PreferencesGroup {
+                set_title: "Device",
+                set_description: Some("Configure the AirGradient local-server endpoint."),
+
+                adw::EntryRow {
+                    set_title: "Local-server Base URL",
+                    set_text: model.url_text.as_str(),
+
+                    add_prefix = &gtk::Image {
+                        set_icon_name: Some("network-wired-symbolic"),
+                    },
+
+                    connect_changed[sender] => move |row| {
+                        sender.input(SettingsInput::UrlChanged(row.text().to_string()));
+                    },
+                },
+
+                adw::SpinRow {
+                    set_title: "Refresh Interval",
+                    set_subtitle: "Seconds between automatic measurement updates",
+                    set_tooltip_text: Some("Refresh interval in seconds. Minimum value is 5 seconds."),
+                    set_adjustment: Some(&gtk::Adjustment::new(
+                        model.interval_secs,
+                        MIN_REFRESH_INTERVAL_SECS as f64,
+                        MAX_REFRESH_INTERVAL_SECS as f64,
+                        1.0,
+                        10.0,
+                        0.0,
+                    )),
+                    set_numeric: true,
+                    connect_value_notify[sender] => move |row| {
+                        sender.input(SettingsInput::IntervalChanged(row.value()));
+                    },
+                },
+
+                adw::ActionRow {
+                    set_title: "Air Quality Notifications",
+                    set_subtitle: "Notify when CO2, AQI, particles, VOC, NOx, or humidity need attention",
+
+                    #[name = "notifications_switch"]
+                    add_suffix = &gtk::Switch {
+                        set_valign: gtk::Align::Center,
+                        set_active: model.notifications_enabled,
+                        connect_active_notify[sender] => move |switch| {
+                            sender.input(SettingsInput::NotificationsToggled(switch.is_active()));
+                        },
+                    },
+
+                    set_activatable_widget: Some(&notifications_switch),
+                },
+
+                adw::ActionRow {
+                    set_title: "Start Minimized",
+                    set_subtitle: "Start hidden and keep polling in the background on next launch",
+
+                    #[name = "start_minimized_switch"]
+                    add_suffix = &gtk::Switch {
+                        set_valign: gtk::Align::Center,
+                        set_active: model.start_minimized,
+                        connect_active_notify[sender] => move |switch| {
+                            sender.input(SettingsInput::StartMinimizedToggled(switch.is_active()));
+                        },
+                    },
+
+                    set_activatable_widget: Some(&start_minimized_switch),
+                },
+
+                adw::ActionRow {
+                    set_title: "Test Notification",
+                    set_subtitle: "Send a sample alert and test click-to-open behavior",
+
+                    #[name = "test_notification_button"]
+                    add_suffix = &gtk::Button {
+                        set_label: "Send",
+                        set_valign: gtk::Align::Center,
+                        add_css_class: "suggested-action",
+                        connect_clicked => SettingsInput::TestNotification,
+                    },
+
+                    set_activatable_widget: Some(&test_notification_button),
+                },
+
+                adw::ActionRow {
+                    set_title: "Save Settings",
+                    set_subtitle: "Save the server URL and restart the refresh timer",
+                    set_activatable: true,
+                    connect_activated => SettingsInput::Save,
+
+                    add_suffix = &gtk::Image {
+                        set_icon_name: Some("document-save-symbolic"),
+                    },
+                },
+            },
+
+            adw::PreferencesGroup {
+                adw::ActionRow {
+                    set_title: "Status",
+                    #[watch]
+                    set_subtitle: model.status.as_str(),
+                },
+            },
         }
-    });
+    }
 
-    let status_row = ActionRow::builder()
-        .title("Status")
-        .subtitle(
-            navigation
-                .ui
-                .state
-                .borrow()
-                .startup_notice
-                .as_ref()
-                .map(|notice| notice.user_message())
-                .unwrap_or_else(|| "Enter a URL like http://192.168.1.201".to_string()),
-        )
-        .build();
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = Self {
+            url_text: init.server_url.unwrap_or_default(),
+            interval_secs: init.refresh_interval.as_secs() as f64,
+            notifications_enabled: init.notifications_enabled,
+            start_minimized: init.start_minimized,
+            theme_mode: init.theme_mode,
+            status: init.status,
+        };
 
-    let save_row = ActionRow::builder()
-        .title("Save Settings")
-        .subtitle("Save the server URL and restart the refresh timer")
-        .activatable(true)
-        .build();
-    save_row.add_suffix(&Image::from_icon_name("document-save-symbolic"));
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
 
-    save_row.connect_activated({
-        let navigation = navigation.clone();
-        let url_row = url_row.clone();
-        let refresh_row = refresh_row.clone();
-        let notifications_switch = notifications_switch.clone();
-        let start_minimized_switch = start_minimized_switch.clone();
-        let auto_refresh_source = auto_refresh_source.clone();
-        let status_row = status_row.clone();
-
-        move |_| {
-            // The UI stores a user-entered string, while the config file stores
-            // a normalized base URL. Keeping normalization here makes fetch
-            // code simpler and avoids saving unusable values.
-            let server_url = match DeviceBaseUrl::parse(&url_row.text()) {
-                Ok(url) => url,
-                Err(err) => {
-                    status_row.set_subtitle(&format!("Invalid URL: {err}"));
-                    return;
+    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
+        match message {
+            SettingsInput::UrlChanged(text) => self.url_text = text,
+            SettingsInput::IntervalChanged(seconds) => self.interval_secs = seconds,
+            SettingsInput::NotificationsToggled(enabled) => self.notifications_enabled = enabled,
+            SettingsInput::StartMinimizedToggled(enabled) => self.start_minimized = enabled,
+            SettingsInput::ThemeSelected(index) => {
+                let mode = THEME_CHOICES
+                    .get(index as usize)
+                    .copied()
+                    .unwrap_or(ThemeMode::System);
+                self.theme_mode = mode;
+                let _ = sender.output(SettingsOutput::ThemeChanged(mode));
+            }
+            SettingsInput::TestNotification => {
+                let _ = sender.output(SettingsOutput::TestNotification);
+            }
+            SettingsInput::Save => match self.validate() {
+                Ok(config) => {
+                    let _ = sender.output(SettingsOutput::Save(Box::new(config)));
                 }
-            };
-
-            let raw_interval = (refresh_row.value().round() as u64)
-                .clamp(MIN_REFRESH_INTERVAL_SECS, MAX_REFRESH_INTERVAL_SECS);
-            let refresh_interval = match RefreshInterval::new(raw_interval) {
-                Ok(interval) => interval,
-                Err(err) => {
-                    status_row.set_subtitle(&format!("Invalid interval: {err}"));
-                    return;
-                }
-            };
-            let config = AppConfig {
-                server_url,
-                refresh_interval,
-                notifications_enabled: notifications_switch.is_active(),
-                start_minimized: start_minimized_switch.is_active(),
-            };
-
-            if let Err(err) = config::write_config(&config) {
-                status_row.set_subtitle(&format!("Failed to save: {err}"));
-                return;
-            }
-
-            {
-                let mut model = navigation.ui.state.borrow_mut();
-                model.set_device_base_url(config.server_url.clone());
-                model.set_refresh_interval(config.refresh_interval);
-                model.set_notifications_enabled(config.notifications_enabled);
-                model.set_start_minimized(config.start_minimized);
-            }
-            navigation
-                .ui
-                .alert_monitor
-                .borrow_mut()
-                .set_enabled(config.notifications_enabled);
-
-            let has_url = config.server_url.is_some();
-            if has_url {
-                navigation
-                    .stack
-                    .set_visible_child_name(Page::Dashboard.id());
-                navigation
-                    .ui
-                    .dashboard_widgets
-                    .server_label
-                    .set_text(&format!(
-                        "Server URL: {}",
-                        config
-                            .server_url
-                            .as_ref()
-                            .map(DeviceBaseUrl::as_str)
-                            .unwrap_or_default()
-                    ));
-                status_row.set_subtitle("Saved. Refreshing dashboard.");
-            } else {
-                navigation.stack.set_visible_child_name(Page::Welcome.id());
-                navigation
-                    .ui
-                    .dashboard_widgets
-                    .server_label
-                    .set_text("Server URL: Not configured");
-                navigation
-                    .ui
-                    .dashboard_widgets
-                    .fetch_status_label
-                    .set_text("Server URL removed.");
-                status_row.set_subtitle("Cleared URL. Returning to Welcome.");
-            }
-
-            start_auto_refresh_timer(navigation.ui.clone(), auto_refresh_source.clone());
-            {
-                let mut last = navigation.ui.last_updated.borrow_mut();
-                *last = None;
-            }
-
-            if has_url {
-                // Saving a valid URL should make the dashboard useful
-                // immediately, so fetch once instead of waiting for the next
-                // interval tick.
-                navigation.ui.trigger_fetch();
-            }
+                Err(err) => self.status = err,
+            },
+            SettingsInput::SetStatus(status) => self.status = status,
         }
-    });
+    }
+}
 
-    let appearance_group = PreferencesGroup::builder()
-        .title("Appearance")
-        .description("GNOME apps should follow the system style by default.")
-        .build();
-    appearance_group.add(&theme_row);
+#[cfg(test)]
+mod tests {
+    use super::{theme_index, Settings};
+    use crate::config::{RefreshInterval, MIN_REFRESH_INTERVAL_SECS};
+    use crate::state::ThemeMode;
 
-    let server_group = PreferencesGroup::builder()
-        .title("Device")
-        .description("Configure the AirGradient local-server endpoint.")
-        .build();
-    server_group.add(&url_row);
-    server_group.add(&refresh_row);
-    server_group.add(&notifications_row);
-    server_group.add(&start_minimized_row);
-    server_group.add(&test_notification_row);
-    server_group.add(&save_row);
+    fn form(url: &str, interval_secs: f64) -> Settings {
+        Settings {
+            url_text: url.to_string(),
+            interval_secs,
+            notifications_enabled: true,
+            start_minimized: false,
+            theme_mode: ThemeMode::System,
+            status: String::new(),
+        }
+    }
 
-    let status_group = PreferencesGroup::new();
-    status_group.add(&status_row);
+    #[test]
+    fn valid_form_normalizes_the_url() {
+        let config = form("192.168.1.201", 30.0)
+            .validate()
+            .expect("form should be valid");
 
-    page.add(&appearance_group);
-    page.add(&server_group);
-    page.add(&status_group);
+        assert_eq!(
+            config.server_url.as_ref().map(|url| url.as_str()),
+            Some("http://192.168.1.201")
+        );
+        assert_eq!(config.refresh_interval, RefreshInterval::new(30).unwrap());
+    }
 
-    page.upcast()
+    #[test]
+    fn empty_url_saves_as_not_configured() {
+        let config = form("  ", 30.0).validate().expect("empty URL is allowed");
+
+        assert!(config.server_url.is_none());
+    }
+
+    #[test]
+    fn unsupported_scheme_is_reported_to_the_user() {
+        let err = form("ftp://device.local", 30.0)
+            .validate()
+            .expect_err("ftp should be rejected");
+
+        assert!(err.starts_with("Invalid URL:"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn too_small_interval_is_clamped_rather_than_rejected() {
+        let config = form("192.168.1.201", 1.0)
+            .validate()
+            .expect("interval should be clamped");
+
+        assert_eq!(config.refresh_interval.as_secs(), MIN_REFRESH_INTERVAL_SECS);
+    }
+
+    #[test]
+    fn theme_index_matches_dropdown_order() {
+        assert_eq!(theme_index(ThemeMode::System), 0);
+        assert_eq!(theme_index(ThemeMode::Light), 1);
+        assert_eq!(theme_index(ThemeMode::Dark), 2);
+    }
 }

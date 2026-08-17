@@ -1,336 +1,361 @@
-//! Dashboard page and measurement application.
+//! Dashboard page.
 //!
-//! This module builds the dashboard layout and owns the widget handles needed to
-//! refresh values after each successful HTTP fetch.
+//! This component owns every card on the page as a child component. When a new
+//! measurement arrives it does one job: turn the raw snapshot into per-card
+//! readings (value, unit, status class, trend) and hand each card its own slice.
+//! The cards themselves know nothing about AirGradient payloads or thresholds.
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::rc::Rc;
+use relm4::gtk::prelude::*;
+use relm4::{gtk, prelude::*};
 
-use adw::Clamp;
-use gtk4::{gdk, prelude::*};
-use gtk4::{Align, Box as GtkBox, FlowBox, Label, Orientation, ScrolledWindow, SelectionMode};
-
-use super::{
-    aqi_widget::AQIWidget,
-    humidity_widget::HumidityWidget,
-    sensor_card::{PresentationStatus, SensorCard},
-    temperature_widget::TemperatureWidget,
+use super::aqi_card::{AqiCard, AqiCardInput};
+use super::environment_card::{EnvironmentCard, EnvironmentCardInput, EnvironmentKind};
+use super::sensor_card::{CardSize, Reading, SensorCard, SensorCardInit, SensorCardInput};
+use super::status::class_for;
+use super::trend::Trend;
+use crate::sensors::thresholds::{
+    co2_status_color, nox_status_color, pm25_status_color, tvoc_status_color,
 };
-use crate::sensors::{
-    thresholds::{
-        aqi_status_color, co2_status_color, nox_status_color, pm25_status_color, tvoc_status_color,
-        StatusColor,
-    },
-    AirMeasureSnapshot,
-};
+use crate::sensors::AirMeasureSnapshot;
 
-fn rgba_u8(r: u8, g: u8, b: u8) -> gdk::RGBA {
-    gdk::RGBA::new(
-        f32::from(r) / 255.0,
-        f32::from(g) / 255.0,
-        f32::from(b) / 255.0,
-        1.0,
-    )
+/// Fixed accent for readings that have no health thresholds to classify against.
+///
+/// Particle counts and PM1/PM10 have no widely agreed indoor breakpoints, so
+/// they get a stable color instead of a misleading green/red verdict.
+const PM_COUNT_CLASS: &str = "status-blue";
+const PM10_CLASS: &str = "status-orange";
+
+#[derive(Debug)]
+pub enum DashboardInput {
+    /// A freshly parsed measurement to display.
+    Show(Box<AirMeasureSnapshot>),
+    /// Text for the "Server URL: ..." line.
+    SetServerUrl(Option<String>),
+    /// Text for the status line under the cards.
+    SetStatus(String),
 }
 
-fn status_rgba(color: StatusColor) -> gdk::RGBA {
-    match color {
-        StatusColor::Green => rgba_u8(51, 209, 122),
-        StatusColor::Yellow => rgba_u8(245, 194, 17),
-        StatusColor::Orange => rgba_u8(255, 120, 0),
-        StatusColor::Red => rgba_u8(237, 51, 59),
-        StatusColor::Purple => rgba_u8(145, 65, 172),
-        StatusColor::Gray => rgba_u8(94, 92, 100),
+pub struct Dashboard {
+    aqi: Controller<AqiCard>,
+    temperature: Controller<EnvironmentCard>,
+    humidity: Controller<EnvironmentCard>,
+    co2: Controller<SensorCard>,
+    tvoc: Controller<SensorCard>,
+    nox: Controller<SensorCard>,
+    pm003_count: Controller<SensorCard>,
+    pm1: Controller<SensorCard>,
+    pm25: Controller<SensorCard>,
+    pm10: Controller<SensorCard>,
+    /// The previous snapshot, kept only to compute trend arrows.
+    previous: Option<AirMeasureSnapshot>,
+    server_text: String,
+    status_text: String,
+}
+
+impl Dashboard {
+    /// Send each card the part of the snapshot it is responsible for.
+    fn distribute(&mut self, snapshot: &AirMeasureSnapshot) {
+        let previous = self.previous.as_ref();
+
+        self.aqi.emit(AqiCardInput::Show {
+            value: snapshot.aqi,
+            previous: previous.and_then(|previous| previous.aqi),
+        });
+        self.temperature.emit(EnvironmentCardInput::Show {
+            value: snapshot.temperature,
+            previous: previous.and_then(|previous| previous.temperature),
+        });
+        self.humidity.emit(EnvironmentCardInput::Show {
+            value: snapshot.humidity,
+            previous: previous.and_then(|previous| previous.humidity),
+        });
+
+        self.co2.emit(SensorCardInput::Show(Reading {
+            value: snapshot.co2,
+            unit: None,
+            status_class: class_for(snapshot.co2, co2_status_color),
+            trend: Trend::between(
+                snapshot.co2,
+                previous.and_then(|previous| previous.co2),
+                "ppm",
+                true,
+            ),
+        }));
+
+        let tvoc_unit = snapshot.tvoc_unit.unwrap_or("index");
+        self.tvoc.emit(SensorCardInput::Show(Reading {
+            value: snapshot.tvoc,
+            unit: snapshot.tvoc_unit.map(str::to_string),
+            status_class: class_for(snapshot.tvoc, tvoc_status_color),
+            trend: Trend::between(
+                snapshot.tvoc,
+                previous.and_then(|previous| previous.tvoc),
+                tvoc_unit,
+                true,
+            ),
+        }));
+
+        let nox_unit = snapshot.nox_unit.unwrap_or("index");
+        self.nox.emit(SensorCardInput::Show(Reading {
+            value: snapshot.nox,
+            unit: snapshot.nox_unit.map(str::to_string),
+            status_class: class_for(snapshot.nox, nox_status_color),
+            trend: Trend::between(
+                snapshot.nox,
+                previous.and_then(|previous| previous.nox),
+                nox_unit,
+                true,
+            ),
+        }));
+
+        self.pm003_count.emit(SensorCardInput::Show(Reading {
+            value: snapshot.pm003_count,
+            unit: None,
+            status_class: PM_COUNT_CLASS,
+            trend: Trend::between(
+                snapshot.pm003_count,
+                previous.and_then(|previous| previous.pm003_count),
+                "count",
+                true,
+            ),
+        }));
+        self.pm1.emit(SensorCardInput::Show(Reading {
+            value: snapshot.pm1,
+            unit: None,
+            status_class: PM_COUNT_CLASS,
+            trend: Trend::between(
+                snapshot.pm1,
+                previous.and_then(|previous| previous.pm1),
+                "µg/m³",
+                true,
+            ),
+        }));
+        self.pm25.emit(SensorCardInput::Show(Reading {
+            value: snapshot.pm25,
+            unit: None,
+            status_class: class_for(snapshot.pm25, pm25_status_color),
+            trend: Trend::between(
+                snapshot.pm25,
+                previous.and_then(|previous| previous.pm25),
+                "µg/m³",
+                true,
+            ),
+        }));
+        self.pm10.emit(SensorCardInput::Show(Reading {
+            value: snapshot.pm10,
+            unit: None,
+            status_class: PM10_CLASS,
+            trend: Trend::between(
+                snapshot.pm10,
+                previous.and_then(|previous| previous.pm10),
+                "µg/m³",
+                true,
+            ),
+        }));
     }
 }
 
-fn fixed_status(class: &'static str, r: u8, g: u8, b: u8) -> PresentationStatus {
-    PresentationStatus::new(class, rgba_u8(r, g, b))
-}
+#[relm4::component(pub)]
+impl SimpleComponent for Dashboard {
+    type Init = ();
+    type Input = DashboardInput;
+    type Output = ();
 
-fn presentation_status(
-    value: Option<f32>,
-    classify: impl FnOnce(f32) -> StatusColor,
-) -> PresentationStatus {
-    value
-        .map(classify)
-        .map(|color| match color {
-            StatusColor::Green => PresentationStatus::green(status_rgba(color)),
-            StatusColor::Yellow => PresentationStatus::yellow(status_rgba(color)),
-            StatusColor::Orange => PresentationStatus::orange(status_rgba(color)),
-            StatusColor::Red => PresentationStatus::red(status_rgba(color)),
-            StatusColor::Purple | StatusColor::Gray => {
-                PresentationStatus::unknown(status_rgba(color))
-            }
-        })
-        .unwrap_or_else(|| PresentationStatus::unknown(rgba_u8(154, 153, 150)))
-}
+    view! {
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            set_vexpand: true,
 
-#[derive(Clone)]
-pub struct DashboardPageWidgets {
-    pub server_label: Label,
-    pub fetch_status_label: Label,
-    pub temperature_widget: TemperatureWidget,
-    pub humidity_widget: HumidityWidget,
-    pub aqi_widget: AQIWidget,
-    pub co2_card: SensorCard,
-    pub nox_card: SensorCard,
-    pub tvoc_card: SensorCard,
-    pub pm003_count_card: SensorCard,
-    pub pm1_card: SensorCard,
-    pub pm25_card: SensorCard,
-    pub pm10_card: SensorCard,
-    /// Last few measurements kept only in memory for trend calculations.
-    history: Rc<RefCell<VecDeque<AirMeasureSnapshot>>>,
-}
+            gtk::ScrolledWindow {
+                set_hscrollbar_policy: gtk::PolicyType::Never,
+                set_vexpand: true,
 
-impl DashboardPageWidgets {
-    /// Apply a parsed measurement snapshot to every dashboard widget.
-    ///
-    /// The dashboard compares the new snapshot with the previous one to show
-    /// trend labels. GTK widgets are reference-counted objects, so this struct
-    /// can be cloned into callbacks and still update the same visible widgets.
-    pub fn apply_measurements(&self, snapshot: &AirMeasureSnapshot) {
-        let previous = self.history.borrow().back().cloned();
+                // `Clamp` keeps the content at a readable width on wide screens
+                // instead of stretching the cards across the whole monitor.
+                adw::Clamp {
+                    set_maximum_size: 960,
+                    set_tightening_threshold: 600,
+                    set_hexpand: true,
 
-        self.temperature_widget
-            .refresh(snapshot.temperature, rgba_u8(53, 132, 228));
-        self.temperature_widget.set_trend(
-            snapshot.temperature,
-            previous.as_ref().and_then(|snapshot| snapshot.temperature),
-        );
-        self.humidity_widget
-            .refresh(snapshot.humidity, rgba_u8(38, 162, 105));
-        self.humidity_widget.set_trend(
-            snapshot.humidity,
-            previous.as_ref().and_then(|snapshot| snapshot.humidity),
-        );
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 18,
+                        set_margin_all: 24,
+                        add_css_class: "dashboard-page",
 
-        self.co2_card.refresh(
-            snapshot.co2,
-            Some("ppm"),
-            presentation_status(snapshot.co2, co2_status_color),
-        );
-        self.co2_card.set_trend(
-            snapshot.co2,
-            previous.as_ref().and_then(|snapshot| snapshot.co2),
-            "ppm",
-        );
-        self.tvoc_card.refresh(
-            snapshot.tvoc,
-            snapshot.tvoc_unit,
-            presentation_status(snapshot.tvoc, tvoc_status_color),
-        );
-        self.tvoc_card.set_trend(
-            snapshot.tvoc,
-            previous.as_ref().and_then(|snapshot| snapshot.tvoc),
-            snapshot.tvoc_unit.unwrap_or("index"),
-        );
-        self.nox_card.refresh(
-            snapshot.nox,
-            snapshot.nox_unit,
-            presentation_status(snapshot.nox, nox_status_color),
-        );
-        self.nox_card.set_trend(
-            snapshot.nox,
-            previous.as_ref().and_then(|snapshot| snapshot.nox),
-            snapshot.nox_unit.unwrap_or("index"),
-        );
-        self.pm003_count_card.refresh(
-            snapshot.pm003_count,
-            Some("count"),
-            fixed_status("status-blue", 53, 132, 228),
-        );
-        self.pm003_count_card.set_trend(
-            snapshot.pm003_count,
-            previous.as_ref().and_then(|snapshot| snapshot.pm003_count),
-            "count",
-        );
-        self.pm1_card.refresh(
-            snapshot.pm1,
-            Some("µg/m³"),
-            fixed_status("status-blue", 98, 160, 234),
-        );
-        self.pm1_card.set_trend(
-            snapshot.pm1,
-            previous.as_ref().and_then(|snapshot| snapshot.pm1),
-            "µg/m³",
-        );
-        self.pm25_card.refresh(
-            snapshot.pm25,
-            Some("µg/m³"),
-            presentation_status(snapshot.pm25, pm25_status_color),
-        );
-        self.pm25_card.set_trend(
-            snapshot.pm25,
-            previous.as_ref().and_then(|snapshot| snapshot.pm25),
-            "µg/m³",
-        );
-        self.pm10_card.refresh(
-            snapshot.pm10,
-            Some("µg/m³"),
-            fixed_status("status-orange", 255, 163, 72),
-        );
-        self.pm10_card.set_trend(
-            snapshot.pm10,
-            previous.as_ref().and_then(|snapshot| snapshot.pm10),
-            "µg/m³",
-        );
+                        gtk::Label {
+                            #[watch]
+                            set_label: model.server_text.as_str(),
+                            set_halign: gtk::Align::Start,
+                            add_css_class: "dim-label",
+                        },
 
-        self.aqi_widget.refresh(
-            snapshot.aqi,
-            presentation_status(snapshot.aqi, aqi_status_color).color(),
-        );
-        self.aqi_widget.set_trend(
-            snapshot.aqi,
-            previous.as_ref().and_then(|snapshot| snapshot.aqi),
-        );
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_spacing: 8,
+                            set_hexpand: true,
+                            set_homogeneous: true,
+                            add_css_class: "dashboard-top",
 
-        {
-            let mut history = self.history.borrow_mut();
-            history.push_back(snapshot.clone());
-            // Keep a tiny rolling history. Today we need only the previous
-            // value, but keeping five samples leaves room for "vs 5 min ago"
-            // style labels later without changing this storage shape.
-            while history.len() > 5 {
-                history.pop_front();
-            }
+                            #[local_ref]
+                            aqi_widget -> gtk::Box {},
+
+                            gtk::Box {
+                                set_orientation: gtk::Orientation::Vertical,
+                                set_spacing: 8,
+                                set_hexpand: true,
+                                add_css_class: "environment-stack",
+
+                                #[local_ref]
+                                temperature_widget -> gtk::Box {},
+
+                                #[local_ref]
+                                humidity_widget -> gtk::Box {},
+                            },
+                        },
+
+                        // FlowBox wraps the cards at narrow widths instead of
+                        // overflowing, without any manual column arithmetic.
+                        gtk::FlowBox {
+                            set_row_spacing: 12,
+                            set_column_spacing: 12,
+                            set_hexpand: true,
+                            set_halign: gtk::Align::Fill,
+                            set_valign: gtk::Align::Start,
+                            set_selection_mode: gtk::SelectionMode::None,
+                            set_min_children_per_line: 1,
+                            set_max_children_per_line: 3,
+                            set_homogeneous: true,
+                            add_css_class: "gas-row",
+
+                            #[local_ref]
+                            co2_widget -> gtk::Box {},
+
+                            #[local_ref]
+                            tvoc_widget -> gtk::Box {},
+
+                            #[local_ref]
+                            nox_widget -> gtk::Box {},
+                        },
+
+                        gtk::FlowBox {
+                            set_row_spacing: 12,
+                            set_column_spacing: 12,
+                            set_hexpand: true,
+                            set_halign: gtk::Align::Fill,
+                            set_valign: gtk::Align::Start,
+                            set_selection_mode: gtk::SelectionMode::None,
+                            set_min_children_per_line: 1,
+                            set_max_children_per_line: 4,
+                            set_homogeneous: true,
+                            add_css_class: "particles-row",
+
+                            #[local_ref]
+                            pm003_widget -> gtk::Box {},
+
+                            #[local_ref]
+                            pm1_widget -> gtk::Box {},
+
+                            #[local_ref]
+                            pm25_widget -> gtk::Box {},
+
+                            #[local_ref]
+                            pm10_widget -> gtk::Box {},
+                        },
+
+                        gtk::Label {
+                            #[watch]
+                            set_label: model.status_text.as_str(),
+                            set_halign: gtk::Align::Start,
+                            add_css_class: "dim-label",
+                        },
+                    },
+                },
+            },
         }
-
-        self.fetch_status_label
-            .set_text("Latest measurements loaded.");
     }
-}
 
-pub fn build_dashboard_page() -> (GtkBox, DashboardPageWidgets) {
-    let page = GtkBox::new(Orientation::Vertical, 0);
-    page.set_vexpand(true);
+    fn init(
+        _init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let gas_card = |title: &str, unit: &str, icon: &str| SensorCardInit {
+            title: title.to_string(),
+            unit: unit.to_string(),
+            icon_name: icon.to_string(),
+            size: CardSize::Narrow,
+        };
+        let particle_card = |title: &str, unit: &str| SensorCardInit {
+            title: title.to_string(),
+            unit: unit.to_string(),
+            icon_name: "airgradient-particles-symbolic".to_string(),
+            size: CardSize::Compact,
+        };
 
-    let scroller = ScrolledWindow::builder()
-        .hscrollbar_policy(gtk4::PolicyType::Never)
-        .vexpand(true)
-        .build();
-    // `Clamp` is a libadwaita layout helper. It keeps content readable on wide
-    // screens instead of stretching cards across the entire window.
-    let clamp = Clamp::builder()
-        .maximum_size(960)
-        .tightening_threshold(600)
-        .hexpand(true)
-        .build();
-    let content = GtkBox::new(Orientation::Vertical, 18);
-    content.add_css_class("dashboard-page");
-    content.set_margin_top(24);
-    content.set_margin_bottom(24);
-    content.set_margin_start(24);
-    content.set_margin_end(24);
+        let model = Self {
+            aqi: AqiCard::builder().launch(()).detach(),
+            temperature: EnvironmentCard::builder()
+                .launch(EnvironmentKind::Temperature)
+                .detach(),
+            humidity: EnvironmentCard::builder()
+                .launch(EnvironmentKind::Humidity)
+                .detach(),
+            co2: SensorCard::builder()
+                .launch(gas_card("CO₂", "ppm", "airgradient-co2-symbolic"))
+                .detach(),
+            tvoc: SensorCard::builder()
+                .launch(gas_card("TVOC", "ppb", "airgradient-voc-symbolic"))
+                .detach(),
+            nox: SensorCard::builder()
+                .launch(gas_card("NOx", "ppb", "airgradient-nox-symbolic"))
+                .detach(),
+            pm003_count: SensorCard::builder()
+                .launch(particle_card("PM₀.₃ Count", "count"))
+                .detach(),
+            pm1: SensorCard::builder()
+                .launch(particle_card("PM₁.₀", "µg/m³"))
+                .detach(),
+            pm25: SensorCard::builder()
+                .launch(particle_card("PM₂.₅", "µg/m³"))
+                .detach(),
+            pm10: SensorCard::builder()
+                .launch(particle_card("PM₁₀", "µg/m³"))
+                .detach(),
+            previous: None,
+            server_text: "Server URL: Not configured".to_string(),
+            status_text: "Press refresh to load current measurements.".to_string(),
+        };
 
-    let server_label = Label::builder()
-        .label("Server URL: Not configured")
-        .halign(Align::Start)
-        .build();
-    server_label.add_css_class("dim-label");
+        let aqi_widget = model.aqi.widget();
+        let temperature_widget = model.temperature.widget();
+        let humidity_widget = model.humidity.widget();
+        let co2_widget = model.co2.widget();
+        let tvoc_widget = model.tvoc.widget();
+        let nox_widget = model.nox.widget();
+        let pm003_widget = model.pm003_count.widget();
+        let pm1_widget = model.pm1.widget();
+        let pm25_widget = model.pm25.widget();
+        let pm10_widget = model.pm10.widget();
 
-    let fetch_status_label = Label::builder()
-        .label("Press refresh to load current measurements.")
-        .halign(Align::Start)
-        .build();
-    fetch_status_label.add_css_class("dim-label");
-
-    let top_row = GtkBox::new(Orientation::Horizontal, 8);
-    top_row.add_css_class("dashboard-top");
-    top_row.set_hexpand(true);
-    top_row.set_homogeneous(true);
-    let env_stack = GtkBox::new(Orientation::Vertical, 8);
-    env_stack.add_css_class("environment-stack");
-    env_stack.set_hexpand(true);
-    let temperature_widget = TemperatureWidget::new();
-    let humidity_widget = HumidityWidget::new();
-    let aqi_widget = AQIWidget::new();
-    top_row.append(&aqi_widget.widget());
-    env_stack.append(&temperature_widget.widget());
-    env_stack.append(&humidity_widget.widget());
-    top_row.append(&env_stack);
-
-    let co2_card = SensorCard::new("CO₂", "ppm", "airgradient-co2-symbolic");
-    let tvoc_card = SensorCard::new("TVOC", "ppb", "airgradient-voc-symbolic");
-    let nox_card = SensorCard::new("NOx", "ppb", "airgradient-nox-symbolic");
-    for card in [&co2_card, &tvoc_card, &nox_card] {
-        // Gas cards should fit three across on the second dashboard row.
-        card.set_narrow();
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
     }
-    let gas_row = build_card_flow(
-        &[co2_card.widget(), tvoc_card.widget(), nox_card.widget()],
-        3,
-    );
-    gas_row.add_css_class("gas-row");
 
-    let pm1_card = SensorCard::new("PM₁.₀", "µg/m³", "airgradient-particles-symbolic");
-    let pm25_card = SensorCard::new("PM₂.₅", "µg/m³", "airgradient-particles-symbolic");
-    let pm10_card = SensorCard::new("PM₁₀", "µg/m³", "airgradient-particles-symbolic");
-    let pm003_count_card =
-        SensorCard::new("PM₀.₃ Count", "count", "airgradient-particles-symbolic");
-    for card in [&pm003_count_card, &pm1_card, &pm25_card, &pm10_card] {
-        // PM cards use the most compact variant so all particle metrics fit on
-        // one row at the default window width.
-        card.set_compact();
+    fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
+        match message {
+            DashboardInput::Show(snapshot) => {
+                self.distribute(&snapshot);
+                self.previous = Some(*snapshot);
+                self.status_text = "Latest measurements loaded.".to_string();
+            }
+            DashboardInput::SetServerUrl(url) => {
+                self.server_text = match url {
+                    Some(url) => format!("Server URL: {url}"),
+                    None => "Server URL: Not configured".to_string(),
+                };
+            }
+            DashboardInput::SetStatus(status) => self.status_text = status,
+        }
     }
-    let particles_row = build_card_flow(
-        &[
-            pm003_count_card.widget(),
-            pm1_card.widget(),
-            pm25_card.widget(),
-            pm10_card.widget(),
-        ],
-        4,
-    );
-    particles_row.add_css_class("particles-row");
-
-    content.append(&server_label);
-    content.append(&top_row);
-    content.append(&gas_row);
-    content.append(&particles_row);
-    content.append(&fetch_status_label);
-    clamp.set_child(Some(&content));
-    scroller.set_child(Some(&clamp));
-    page.append(&scroller);
-
-    let widgets = DashboardPageWidgets {
-        server_label,
-        fetch_status_label,
-        temperature_widget,
-        humidity_widget,
-        aqi_widget,
-        co2_card,
-        nox_card,
-        tvoc_card,
-        pm003_count_card,
-        pm1_card,
-        pm25_card,
-        pm10_card,
-        history: Rc::new(RefCell::new(VecDeque::with_capacity(5))),
-    };
-
-    (page, widgets)
-}
-
-fn build_card_flow(cards: &[GtkBox], max_per_line: u32) -> FlowBox {
-    // FlowBox gives us a responsive grid-like row without manually calculating
-    // columns. At narrow widths it can wrap cards instead of overflowing.
-    let flow = FlowBox::builder()
-        .row_spacing(12)
-        .column_spacing(12)
-        .hexpand(true)
-        .halign(Align::Fill)
-        .valign(Align::Start)
-        .selection_mode(SelectionMode::None)
-        .min_children_per_line(1)
-        .max_children_per_line(max_per_line)
-        .homogeneous(true)
-        .build();
-
-    for card in cards {
-        flow.insert(card, -1);
-    }
-    flow
 }

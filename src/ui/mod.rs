@@ -1,51 +1,49 @@
-//! GTK user-interface modules.
+//! Relm4 user interface.
 //!
-//! `ui::app` builds the top-level window. The other files provide pages and
-//! reusable dashboard widgets. This module also registers CSS and embedded icon
-//! resources before widgets try to use them.
+//! Every visible part of the app is a Relm4 component. `app` is the root: it owns
+//! the window and is the only component that performs I/O. The rest are pure
+//! views driven by messages:
+//!
+//! * `dashboard` arranges the cards and splits a measurement between them,
+//! * `sensor_card`, `environment_card` and `aqi_card` render one reading each,
+//! * `settings`, `welcome` and `help` are the other pages,
+//! * `tray` bridges the StatusNotifier tray thread into the UI, and
+//! * `trend` and `status` are pure logic with no widgets, so they are testable.
 
-mod app;
-mod aqi_widget;
+pub mod app;
+mod aqi_card;
 mod dashboard;
-mod fetch;
-mod humidity_widget;
+mod environment_card;
+mod help;
 mod sensor_card;
 mod settings;
-mod temperature_widget;
+mod status;
 mod tray;
+mod trend;
+mod welcome;
 
-pub use app::build_main_window;
-pub use dashboard::{build_dashboard_page, DashboardPageWidgets};
+use relm4::gtk;
+use relm4::gtk::gio;
 
-use gtk4::{gdk, CssProvider, IconTheme};
-
+/// Path the compiled GResource bundle is registered under.
 const ICON_RESOURCE_PATH: &str = "/com/airgradient/desktop/icons";
 
+/// Make the embedded symbolic icons available to `gtk::Image::from_icon_name`.
+///
+/// `build.rs` compiles `resources/icons/` into a GResource bundle at build time.
+/// Registering it here, and adding its path to the icon theme, is what lets the
+/// rest of the code refer to icons by name (`airgradient-co2-symbolic`) instead
+/// of loading SVG files from disk at runtime.
 pub fn register_resources() {
-    // The macro references the file produced by `build.rs`. Registering it
-    // makes the SVG icons available through GTK's resource system.
     gio::resources_register_include!("airgradient.gresource")
         .expect("AirGradient resources should be compiled into the binary");
 
-    if let Some(display) = gdk::Display::default() {
-        // Adding the resource path lets `Image::from_icon_name()` find icons
-        // such as `airgradient-temperature-symbolic`.
-        IconTheme::for_display(&display).add_resource_path(ICON_RESOURCE_PATH);
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::IconTheme::for_display(&display).add_resource_path(ICON_RESOURCE_PATH);
     }
 }
 
-pub fn load_dashboard_css() {
-    let css = include_str!("../../assets/dashboard.css");
-    let provider = CssProvider::new();
-    provider.load_from_data(css);
-
-    if let Some(display) = gdk::Display::default() {
-        // Application priority lets our CSS override default widget styling
-        // while still allowing GTK/libadwaita to provide the base theme.
-        gtk4::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
-}
+/// The dashboard stylesheet, embedded in the binary at compile time.
+///
+/// Because this is `include_str!`, editing the CSS requires a rebuild.
+pub const DASHBOARD_CSS: &str = include_str!("../../assets/dashboard.css");

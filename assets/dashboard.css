@@ -221,9 +221,32 @@
   color: #77767b;
 }
 
+/* The status dot is a plain 8x8 box; its color comes from the card's status
+ * class so Rust only ever passes a class name to the widget. */
 .status-dot {
   border-radius: 999px;
   margin: 0;
+  background-color: #9a9996;
+}
+
+.status-green .status-dot {
+  background-color: #33d17a;
+}
+
+.status-blue .status-dot {
+  background-color: #3584e4;
+}
+
+.status-yellow .status-dot {
+  background-color: #f5c211;
+}
+
+.status-orange .status-dot {
+  background-color: #ff7800;
+}
+
+.status-red .status-dot {
+  background-color: #ed333b;
 }
 
 /* Soft card gradients. These are intentionally subtle to stay GNOME-like. */

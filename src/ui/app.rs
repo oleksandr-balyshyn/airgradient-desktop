@@ -1,532 +1,516 @@
-//! Main GTK window and application UI flow.
+//! Root component: the window, the header bar, navigation, and the refresh loop.
 //!
-//! This module owns the visible application shell: header bar, page stack,
-//! settings page, timers, and measurement fetching. It intentionally keeps the
-//! lower-level dashboard widgets in separate modules.
+//! This is the only component that talks to the outside world. It owns the
+//! config file, the alert policy, the HTTP fetches, and the tray icon, and it
+//! passes finished results down to child components as messages. The children
+//! (dashboard, settings, welcome, help) never do I/O themselves.
+//!
+//! Two things run on a schedule, and both are driven by a single one-second
+//! "tick" command rather than by several GLib timers:
+//!
+//! * the "Last updated: 17s ago" label in the header, and
+//! * the automatic refresh, which fires when enough ticks have passed.
+//!
+//! Using one ticker means changing the refresh interval in Settings needs no
+//! timer bookkeeping at all — the next tick simply compares against the new
+//! interval.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use adw::{prelude::*, ActionRow, HeaderBar, PreferencesGroup, PreferencesPage, StatusPage};
-use gtk4::{Align, Box as GtkBox, Button, Label, Orientation, Stack, StackTransitionType};
+use relm4::adw::prelude::*;
+use relm4::gtk::gio;
+use relm4::{adw, gtk, prelude::*};
 
-use crate::config::{ConfigStartupNotice, RefreshInterval};
-use crate::ui::settings::build_settings_page;
-use crate::ui::tray::{install_system_tray, SystemTrayRuntime};
-use crate::ui::{
-    build_dashboard_page, load_dashboard_css, register_resources, DashboardPageWidgets,
-};
-use crate::{
-    alerts::AlertMonitor,
-    app_info::APP_NAME,
-    state::{AppState, Page, ThemeMode},
-};
+use super::dashboard::{Dashboard, DashboardInput};
+use super::help::Help;
+use super::settings::{Settings, SettingsInit, SettingsInput, SettingsOutput};
+use super::tray::{self, TrayHandle};
+use super::welcome::{Welcome, WelcomeOutput};
+use crate::alerts::{AlertMonitor, AlertNotification, AlertSeverity};
+use crate::app_info::APP_NAME;
+use crate::config::{self, AppConfig, LoadedConfig};
+use crate::device::{fetch_current_measurements, DeviceBaseUrl};
+use crate::notifications::send_air_quality_notification;
+use crate::sensors::AirMeasureSnapshot;
+use crate::state::{Page, ThemeMode};
 
 const DEFAULT_WIDTH: i32 = 1180;
 const DEFAULT_HEIGHT: i32 = 780;
 
-type SharedAlertMonitor = Rc<RefCell<AlertMonitor>>;
+/// How often the shared ticker fires.
+const TICK: Duration = Duration::from_secs(1);
 
-#[derive(Clone)]
-pub(super) struct UiContext {
-    pub(super) app: adw::Application,
-    pub(super) state: Rc<RefCell<AppState>>,
-    pub(super) dashboard_widgets: DashboardPageWidgets,
-    pub(super) last_updated: Rc<RefCell<Option<Instant>>>,
-    pub(super) last_updated_label: Label,
-    pub(super) alert_monitor: SharedAlertMonitor,
+#[derive(Debug)]
+pub enum AppInput {
+    /// Show a specific page.
+    Navigate(Page),
+    /// Show whichever page is "home" right now: the dashboard once a device is
+    /// configured, otherwise onboarding.
+    GoHome,
+    /// Fetch measurements now.
+    Refresh,
+    /// Bring the window back from the tray or from a notification click.
+    ShowWindow,
+    /// Hide the window but keep polling in the background.
+    HideWindow,
+    /// Exit for real.
+    Quit,
+    /// Persist a validated configuration from the settings page.
+    SaveConfig(Box<AppConfig>),
+    /// Apply a light/dark/system preference immediately.
+    ThemeChanged(ThemeMode),
+    /// Send a sample notification so the user can verify delivery.
+    SendTestNotification,
 }
 
-impl UiContext {
-    pub(super) fn trigger_fetch(&self) {
-        super::fetch::trigger_fetch_current_measures(self.clone());
+#[derive(Debug)]
+pub enum AppCommand {
+    /// One second has passed.
+    Tick,
+    /// A fetch finished, successfully or not.
+    Fetched(Result<Box<AirMeasureSnapshot>, String>),
+}
+
+pub struct App {
+    page: Page,
+    server_url: Option<DeviceBaseUrl>,
+    /// Seconds between automatic refreshes.
+    refresh_interval_secs: u64,
+    /// Ticks counted since the last fetch was started.
+    seconds_since_fetch: u64,
+    last_updated: Option<Instant>,
+    alerts: AlertMonitor,
+    dashboard: Controller<Dashboard>,
+    settings: Controller<Settings>,
+    /// Held only to keep the page alive; dropping a controller destroys its
+    /// component and would leave an empty page behind in the stack.
+    _welcome: Controller<Welcome>,
+    _help: Controller<Help>,
+    /// Keeps the application alive while the window is hidden in the tray.
+    _hold: gio::ApplicationHoldGuard,
+    /// `None` when the desktop has no StatusNotifier host.
+    _tray: Option<TrayHandle>,
+}
+
+impl App {
+    fn has_server_url(&self) -> bool {
+        self.server_url.is_some()
     }
-}
 
-#[derive(Clone)]
-pub(super) struct NavigationContext {
-    pub(super) ui: UiContext,
-    pub(super) stack: Stack,
-}
-
-struct AppRuntime {
-    _hold_guard: gio::ApplicationHoldGuard,
-    _tray: Option<SystemTrayRuntime>,
-    last_updated_source: Option<glib::SourceId>,
-    auto_refresh_source: Rc<RefCell<Option<glib::SourceId>>>,
-}
-
-impl Drop for AppRuntime {
-    fn drop(&mut self) {
-        if let Some(source) = self.last_updated_source.take() {
-            source.remove();
+    /// Page to show when the user asks for "home".
+    fn home_page(&self) -> Page {
+        if self.has_server_url() {
+            Page::Dashboard
+        } else {
+            Page::Welcome
         }
-        if let Some(source) = self.auto_refresh_source.borrow_mut().take() {
-            source.remove();
+    }
+
+    /// Human-readable age of the most recent successful fetch.
+    fn last_updated_text(&self) -> String {
+        let Some(last) = self.last_updated else {
+            return "Last updated: not yet".to_string();
+        };
+
+        let seconds = Instant::now().saturating_duration_since(last).as_secs();
+        match seconds {
+            0..=4 => "Last updated: just now".to_string(),
+            5..=59 => format!("Last updated: {seconds}s ago"),
+            _ => format!("Last updated: {}m {}s ago", seconds / 60, seconds % 60),
         }
+    }
+
+    /// Start a fetch on a background thread, if a device is configured.
+    ///
+    /// `fetch_current_measurements` blocks, so it must not run on the UI thread.
+    /// `spawn_oneshot_command` puts it on Relm4's blocking thread pool and
+    /// delivers the result back as an `AppCommand::Fetched` message.
+    fn start_fetch(&mut self, sender: &ComponentSender<Self>) {
+        self.seconds_since_fetch = 0;
+
+        let Some(base_url) = self.server_url.clone() else {
+            self.dashboard.emit(DashboardInput::SetStatus(
+                "No server URL configured.".into(),
+            ));
+            return;
+        };
+
+        self.dashboard
+            .emit(DashboardInput::SetStatus("Fetching measurements...".into()));
+        sender.spawn_oneshot_command(move || {
+            AppCommand::Fetched(
+                fetch_current_measurements(&base_url)
+                    .map(Box::new)
+                    .map_err(|err| err.to_string()),
+            )
+        });
+    }
+
+    /// Hand an alert to the desktop, reporting delivery failures on stderr.
+    fn deliver(alert: AlertNotification) {
+        if let Err(err) = send_air_quality_notification(&relm4::main_adw_application(), alert) {
+            eprintln!("System notification failed: {err}");
+        }
+    }
+
+    fn apply_color_scheme(theme_mode: ThemeMode) {
+        adw::StyleManager::default().set_color_scheme(match theme_mode {
+            ThemeMode::System => adw::ColorScheme::Default,
+            ThemeMode::Light => adw::ColorScheme::ForceLight,
+            ThemeMode::Dark => adw::ColorScheme::ForceDark,
+        });
     }
 }
 
-impl NavigationContext {
-    fn switch_to_page(&self, page: Page) {
-        {
-            let mut model = self.ui.state.borrow_mut();
-            model.set_page(page);
+#[relm4::component(pub)]
+impl Component for App {
+    type Init = LoadedConfig;
+    type Input = AppInput;
+    type Output = ();
+    type CommandOutput = AppCommand;
+
+    view! {
+        adw::ApplicationWindow {
+            set_title: Some(APP_NAME),
+            set_default_width: DEFAULT_WIDTH,
+            set_default_height: DEFAULT_HEIGHT,
+
+            // Closing the window means "keep running in the tray". Quitting is
+            // an explicit action from the tray menu or the app action.
+            connect_close_request[sender] => move |_| {
+                sender.input(AppInput::HideWindow);
+                gtk::glib::Propagation::Stop
+            },
+
+            adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {
+                    add_css_class: "flat",
+
+                    #[wrap(Some)]
+                    set_title_widget = &gtk::Label {
+                        set_label: APP_NAME,
+                        add_css_class: "title",
+                    },
+
+                    pack_start = &gtk::Button {
+                        set_icon_name: "go-home-symbolic",
+                        set_tooltip_text: Some("Home"),
+                        connect_clicked => AppInput::GoHome,
+                    },
+
+                    pack_start = &gtk::Button {
+                        set_icon_name: "view-refresh-symbolic",
+                        set_tooltip_text: Some("Refresh measurements"),
+                        connect_clicked => AppInput::Refresh,
+                    },
+
+                    pack_start = &gtk::Label {
+                        #[watch]
+                        set_label: &model.last_updated_text(),
+                        add_css_class: "dim-label",
+                    },
+
+                    pack_end = &gtk::Button {
+                        set_icon_name: "help-about-symbolic",
+                        set_tooltip_text: Some("Help"),
+                        connect_clicked => AppInput::Navigate(Page::Help),
+                    },
+
+                    pack_end = &gtk::Button {
+                        set_icon_name: "preferences-system-symbolic",
+                        set_tooltip_text: Some("Settings"),
+                        connect_clicked => AppInput::Navigate(Page::Settings),
+                    },
+                },
+
+                #[wrap(Some)]
+                #[name = "shell"]
+                set_content = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_margin_all: 12,
+                    set_vexpand: true,
+                    add_css_class: "app-shell",
+
+                    #[local_ref]
+                    stack -> gtk::Stack {
+                        set_vexpand: true,
+                        set_hexpand: true,
+                        set_transition_type: gtk::StackTransitionType::Crossfade,
+                        #[watch]
+                        set_visible_child_name: model.page.id(),
+                    },
+                },
+            },
         }
-        self.stack.set_visible_child_name(page.id());
-
-        // Navigating back to the dashboard is a useful moment to refresh, because
-        // the user is explicitly asking to see current measurements.
-        if page == Page::Dashboard && self.ui.state.borrow().has_server_url() {
-            self.ui.trigger_fetch();
-        }
-    }
-}
-
-pub fn build_main_window(
-    app: &adw::Application,
-    state: Rc<RefCell<AppState>>,
-    run_minimized: bool,
-) -> adw::ApplicationWindow {
-    let style_manager = adw::StyleManager::default();
-    {
-        let model = state.borrow();
-        apply_color_scheme(&style_manager, model.theme_mode);
     }
 
-    register_resources();
-    load_dashboard_css();
+    fn init(
+        loaded: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let LoadedConfig {
+            config,
+            startup_notice,
+        } = loaded;
 
-    let window = adw::ApplicationWindow::builder()
-        .application(app)
-        .title(APP_NAME)
-        .default_width(DEFAULT_WIDTH)
-        .default_height(DEFAULT_HEIGHT)
-        .build();
+        let dashboard = Dashboard::builder().launch(()).detach();
+        let settings = Settings::builder()
+            .launch(SettingsInit {
+                server_url: config
+                    .server_url
+                    .as_ref()
+                    .map(|url| url.as_str().to_string()),
+                refresh_interval: config.refresh_interval,
+                notifications_enabled: config.notifications_enabled,
+                start_minimized: config.start_minimized,
+                theme_mode: ThemeMode::System,
+                status: startup_notice.as_ref().map_or_else(
+                    || "Enter a URL like http://192.168.1.201".to_string(),
+                    |notice| notice.user_message(),
+                ),
+            })
+            .forward(sender.input_sender(), |output| match output {
+                SettingsOutput::Save(config) => AppInput::SaveConfig(config),
+                SettingsOutput::ThemeChanged(mode) => AppInput::ThemeChanged(mode),
+                SettingsOutput::TestNotification => AppInput::SendTestNotification,
+            });
+        let welcome =
+            Welcome::builder()
+                .launch(startup_notice)
+                .forward(sender.input_sender(), |output| match output {
+                    WelcomeOutput::OpenSettings => AppInput::Navigate(Page::Settings),
+                });
+        let help = Help::builder().launch(()).detach();
 
-    let last_updated_label = Label::new(Some("Last updated: not yet"));
-    last_updated_label.set_halign(Align::Start);
-    // `last_updated` is shared between the fetch callback and a once-per-second
-    // timer that turns the timestamp into text such as "17s ago".
-    let last_updated = Rc::new(RefCell::new(None::<Instant>));
-    // Store the active auto-refresh source so changing Settings can remove the
-    // old timer before installing a new one.
-    let auto_refresh_source = Rc::new(RefCell::new(None));
+        // The stack is assembled here rather than in `view!` because each page
+        // needs a stable name to switch to, and those names come from `Page`.
+        let stack = gtk::Stack::new();
+        stack.add_named(welcome.widget(), Some(Page::Welcome.id()));
+        stack.add_named(dashboard.widget(), Some(Page::Dashboard.id()));
+        stack.add_named(settings.widget(), Some(Page::Settings.id()));
+        stack.add_named(help.widget(), Some(Page::Help.id()));
 
-    let (dashboard_page, dashboard_widgets) = build_dashboard_page();
-    let alert_monitor = Rc::new(RefCell::new(AlertMonitor::new(
-        state.borrow().notifications_enabled,
-    )));
-    let ui = UiContext {
-        app: app.clone(),
-        state: state.clone(),
-        dashboard_widgets: dashboard_widgets.clone(),
-        last_updated: last_updated.clone(),
-        last_updated_label: last_updated_label.clone(),
-        alert_monitor,
-    };
-
-    let (page_area, stack) =
-        create_page_area(ui.clone(), dashboard_page, auto_refresh_source.clone());
-    let navigation = NavigationContext {
-        ui: ui.clone(),
-        stack: stack.clone(),
-    };
-
-    let root = GtkBox::new(Orientation::Vertical, 0);
-    root.add_css_class("app-shell");
-    update_dark_shell_class(&root, style_manager.is_dark());
-    // When System theme is selected, libadwaita can change between light and
-    // dark while the app is running. Keep our custom root CSS class in sync.
-    style_manager.connect_dark_notify({
-        let root = root.clone();
-        move |manager| update_dark_shell_class(&root, manager.is_dark())
-    });
-    root.append(&create_header_bar(navigation.clone()));
-    root.append(&page_area);
-    window.set_content(Some(&root));
-    install_app_actions(app, &window, &stack, state.clone());
-    let tray = install_system_tray(app, &window, &stack, state.clone());
-    window.connect_close_request({
-        let window = window.clone();
-        move |_| {
-            window.hide();
-            glib::Propagation::Stop
-        }
-    });
-    // The close button now means "keep running in the background". `app.quit`
-    // is the intentional exit path from the tray menu or application action.
-    let hold_guard = app.hold();
-
-    if state.borrow().has_server_url() {
-        // If config already contains a server URL, open directly into useful
-        // data instead of waiting for manual refresh.
-        ui.trigger_fetch();
-    }
-
-    let last_updated_source =
-        start_last_updated_timer(last_updated.clone(), last_updated_label.clone());
-    start_auto_refresh_timer(ui, auto_refresh_source.clone());
-
-    let runtime = AppRuntime {
-        _hold_guard: hold_guard,
-        _tray: tray,
-        last_updated_source: Some(last_updated_source),
-        auto_refresh_source: auto_refresh_source.clone(),
-    };
-    // Store runtime resources on the window so they live exactly as long as the
-    // main GTK object. GLib owns this qdata and drops it when the window is
-    // finalized.
-    unsafe {
-        window.set_data("airgradient-runtime", runtime);
-    }
-
-    if !(run_minimized || state.borrow().start_minimized) {
-        window.present();
-    }
-    window
-}
-
-fn create_header_bar(navigation: NavigationContext) -> HeaderBar {
-    let header = HeaderBar::builder()
-        .title_widget(&Label::new(Some(APP_NAME)))
-        .build();
-    header.add_css_class("flat");
-    header.add_css_class("flat-header");
-
-    let home_button = Button::builder()
-        .icon_name("go-home-symbolic")
-        .tooltip_text("Home")
-        .build();
-    let refresh_button = Button::builder()
-        .icon_name("view-refresh-symbolic")
-        .tooltip_text("Refresh measurements")
-        .build();
-    let settings_button = Button::builder()
-        .icon_name("preferences-system-symbolic")
-        .tooltip_text("Settings")
-        .build();
-    let help_button = Button::builder()
-        .icon_name("help-about-symbolic")
-        .tooltip_text("Help")
-        .build();
-
-    refresh_button.connect_clicked({
-        let ui = navigation.ui.clone();
-        move |_| {
-            {
-                let mut model = ui.state.borrow_mut();
-                model.register_action();
-            }
-            ui.trigger_fetch();
-        }
-    });
-
-    home_button.connect_clicked({
-        let navigation = navigation.clone();
-        move |_| {
-            // The home button means "default page". Before setup that is
-            // Welcome; after setup it is Dashboard.
-            let target = if navigation.ui.state.borrow().has_server_url() {
+        let mut model = Self {
+            // A configured device means there is data worth showing immediately.
+            page: if config.server_url.is_some() {
                 Page::Dashboard
             } else {
                 Page::Welcome
-            };
-            navigation.switch_to_page(target);
+            },
+            server_url: config.server_url.clone(),
+            refresh_interval_secs: config.refresh_interval.as_secs(),
+            seconds_since_fetch: 0,
+            last_updated: None,
+            alerts: AlertMonitor::new(config.notifications_enabled),
+            dashboard,
+            settings,
+            _welcome: welcome,
+            _help: help,
+            _hold: relm4::main_application().hold(),
+            _tray: tray::install(sender.input_sender().clone()),
+        };
+
+        model.dashboard.emit(DashboardInput::SetServerUrl(
+            config
+                .server_url
+                .as_ref()
+                .map(|url| url.as_str().to_string()),
+        ));
+
+        install_app_actions(&sender);
+
+        // One ticker drives both the "last updated" text and auto-refresh. It is
+        // registered with the component's shutdown receiver so it stops when the
+        // component does, instead of leaking a timer.
+        sender.command(|out, shutdown| {
+            shutdown
+                .register(async move {
+                    let mut ticker = relm4::tokio::time::interval(TICK);
+                    loop {
+                        ticker.tick().await;
+                        if out.send(AppCommand::Tick).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .drop_on_shutdown()
+        });
+
+        if model.has_server_url() {
+            model.start_fetch(&sender);
         }
-    });
 
-    settings_button.connect_clicked({
-        let navigation = navigation.clone();
-        move |_| {
-            navigation.switch_to_page(Page::Settings);
-        }
-    });
+        let stack = &stack;
+        let widgets = view_output!();
 
-    help_button.connect_clicked({
-        let navigation = navigation.clone();
-        move |_| {
-            navigation.switch_to_page(Page::Help);
-        }
-    });
+        track_dark_shell(&widgets.shell);
 
-    header.pack_start(&home_button);
-    header.pack_start(&refresh_button);
-    header.pack_start(&navigation.ui.last_updated_label);
-    header.pack_end(&help_button);
-    header.pack_end(&settings_button);
-
-    header
-}
-
-fn create_page_area(
-    ui: UiContext,
-    dashboard_page: GtkBox,
-    auto_refresh_source: Rc<RefCell<Option<glib::SourceId>>>,
-) -> (GtkBox, Stack) {
-    let container = GtkBox::new(Orientation::Vertical, 12);
-    container.set_margin_top(12);
-    container.set_margin_bottom(12);
-    container.set_margin_start(12);
-    container.set_margin_end(12);
-    container.set_vexpand(true);
-
-    let stack = Stack::builder()
-        .vexpand(true)
-        .hexpand(true)
-        .transition_type(StackTransitionType::SlideLeftRight)
-        .build();
-
-    // `gtk4::Stack` keeps all pages alive and switches visibility by name.
-    // This is simple for an app with a few pages and avoids rebuilding Settings
-    // every time the user navigates.
-    let navigation = NavigationContext {
-        ui,
-        stack: stack.clone(),
-    };
-    let startup_notice = navigation.ui.state.borrow().startup_notice.clone();
-    let welcome_page = build_welcome_page(stack.clone(), startup_notice.as_ref());
-    let settings_page = build_settings_page(navigation.clone(), auto_refresh_source.clone());
-    let help_page = build_help_page();
-
-    stack.add_titled(
-        &welcome_page,
-        Some(Page::Welcome.id()),
-        Page::Welcome.title(),
-    );
-    stack.add_titled(
-        &dashboard_page,
-        Some(Page::Dashboard.id()),
-        Page::Dashboard.title(),
-    );
-    stack.add_titled(
-        &settings_page,
-        Some(Page::Settings.id()),
-        Page::Settings.title(),
-    );
-    stack.add_titled(&help_page, Some(Page::Help.id()), Page::Help.title());
-
-    container.append(&stack);
-
-    let current_page = navigation.ui.state.borrow().current_page;
-    stack.set_visible_child_name(current_page.id());
-
-    (container, stack)
-}
-
-fn build_welcome_page(stack: Stack, startup_notice: Option<&ConfigStartupNotice>) -> gtk4::Widget {
-    let open_settings_button = Button::builder().label("Open Settings").build();
-    open_settings_button.add_css_class("suggested-action");
-    open_settings_button.connect_clicked(move |_| {
-        stack.set_visible_child_name(Page::Settings.id());
-    });
-
-    let actions = GtkBox::new(Orientation::Horizontal, 0);
-    actions.set_halign(Align::Center);
-    actions.append(&open_settings_button);
-
-    let description = match startup_notice {
-        Some(ConfigStartupNotice::ReadFailed(_)) | Some(ConfigStartupNotice::ParseFailed(_)) => {
-            format!(
-                "{} {}",
-                "Saved settings could not be loaded, so defaults are active.",
-                "Open Settings to review and save a corrected configuration."
-            )
-        }
-        _ => "Configure the local-server base URL to start showing measurements. Accepted formats include http://192.168.1.201, 192.168.1.201, and http://192.168.1.201:80.".to_string(),
-    };
-
-    let page = StatusPage::builder()
-        .icon_name("network-wireless-symbolic")
-        .title("Connect Device")
-        .description(&description)
-        .child(&actions)
-        .build();
-
-    page.upcast()
-}
-
-fn build_help_page() -> gtk4::Widget {
-    let page = PreferencesPage::builder()
-        .title("Help")
-        .icon_name("help-about-symbolic")
-        .build();
-
-    let setup_group = PreferencesGroup::builder()
-        .title("Setup")
-        .description("How to connect the app to an AirGradient local server.")
-        .build();
-    setup_group.add(
-        &ActionRow::builder()
-            .title("Configure the Server")
-            .subtitle("Open Settings and enter the local-server base URL.")
-            .build(),
-    );
-    setup_group.add(
-        &ActionRow::builder()
-            .title("Fetch Measurements")
-            .subtitle("Save settings to poll /measures/current automatically.")
-            .build(),
-    );
-    setup_group.add(
-        &ActionRow::builder()
-            .title("Refresh Manually")
-            .subtitle("Use the refresh button in the header bar for an immediate update.")
-            .build(),
-    );
-
-    page.add(&setup_group);
-    page.upcast()
-}
-
-fn start_last_updated_timer(
-    last_updated: Rc<RefCell<Option<Instant>>>,
-    label: Label,
-) -> glib::SourceId {
-    let update = {
-        let last_updated = last_updated.clone();
-        let label = label.clone();
-        move || {
-            update_last_updated_text(&last_updated, &label);
-            glib::ControlFlow::Continue
-        }
-    };
-
-    // This timer updates only text. It does not fetch data.
-    glib::timeout_add_seconds_local(1, update)
-}
-
-pub(super) fn start_auto_refresh_timer(
-    ui: UiContext,
-    auto_refresh_source: Rc<RefCell<Option<glib::SourceId>>>,
-) {
-    if let Some(source) = auto_refresh_source.borrow_mut().take() {
-        // Removing the old SourceId prevents multiple refresh loops after the
-        // user changes the interval in Settings.
-        source.remove();
+        ComponentParts { model, widgets }
     }
 
-    let (interval_secs, has_server_url) = {
-        let model = ui.state.borrow();
-        (
-            normalized_refresh_interval(model.refresh_interval.as_secs()),
-            model.has_server_url(),
-        )
-    };
-
-    if !has_server_url {
-        // No URL means there is nothing safe to poll.
-        return;
+    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>, root: &Self::Root) {
+        match message {
+            AppInput::Navigate(page) => {
+                self.page = page;
+                // Returning to the dashboard is an explicit request to see
+                // current data, so refresh while the user is looking at it.
+                if page == Page::Dashboard && self.has_server_url() {
+                    self.start_fetch(&sender);
+                }
+            }
+            AppInput::GoHome => sender.input(AppInput::Navigate(self.home_page())),
+            AppInput::Refresh => self.start_fetch(&sender),
+            AppInput::ShowWindow => {
+                self.page = if self.has_server_url() {
+                    Page::Dashboard
+                } else {
+                    Page::Settings
+                };
+                root.present();
+            }
+            AppInput::HideWindow => root.set_visible(false),
+            AppInput::Quit => relm4::main_application().quit(),
+            AppInput::ThemeChanged(mode) => Self::apply_color_scheme(mode),
+            AppInput::SendTestNotification => {
+                let result = send_air_quality_notification(
+                    &relm4::main_adw_application(),
+                    AlertNotification {
+                        id: "airgradient-test-notification".into(),
+                        title: "Air Monitor test notification".into(),
+                        body: "Notifications are working. Click this notification to open the \
+                               dashboard."
+                            .into(),
+                        severity: AlertSeverity::Notice,
+                    },
+                );
+                self.settings.emit(SettingsInput::SetStatus(match result {
+                    Ok(()) => "Test notification sent.".to_string(),
+                    Err(err) => format!("Test notification failed: {err}"),
+                }));
+            }
+            AppInput::SaveConfig(config) => self.save_config(*config, &sender),
+        }
     }
 
-    let source = glib::timeout_add_seconds_local(interval_secs.as_secs() as u32, move || {
-        if !ui.state.borrow().has_server_url() {
-            // Stop the timer if the URL was cleared after the timer was created.
-            return glib::ControlFlow::Break;
+    fn update_cmd(
+        &mut self,
+        message: Self::CommandOutput,
+        sender: ComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
+        match message {
+            AppCommand::Tick => {
+                self.seconds_since_fetch = self.seconds_since_fetch.saturating_add(1);
+                if self.has_server_url() && self.seconds_since_fetch >= self.refresh_interval_secs {
+                    self.start_fetch(&sender);
+                }
+            }
+            AppCommand::Fetched(Ok(snapshot)) => {
+                self.last_updated = Some(Instant::now());
+                for alert in self.alerts.evaluate(&snapshot) {
+                    Self::deliver(alert);
+                }
+                self.dashboard.emit(DashboardInput::Show(snapshot));
+            }
+            AppCommand::Fetched(Err(err)) => {
+                self.dashboard
+                    .emit(DashboardInput::SetStatus(format!("Fetch failed: {err}")));
+                if let Some(alert) = self.alerts.record_fetch_error(&err) {
+                    Self::deliver(alert);
+                }
+            }
+        }
+    }
+}
+
+impl App {
+    /// Persist a validated configuration and apply it to the running app.
+    fn save_config(&mut self, config: AppConfig, sender: &ComponentSender<Self>) {
+        if let Err(err) = config::write_config(&config) {
+            self.settings
+                .emit(SettingsInput::SetStatus(format!("Failed to save: {err}")));
+            return;
         }
 
-        ui.trigger_fetch();
-        glib::ControlFlow::Continue
+        self.server_url = config.server_url.clone();
+        self.refresh_interval_secs = config.refresh_interval.as_secs();
+        self.alerts.set_enabled(config.notifications_enabled);
+        self.last_updated = None;
+
+        let url_text = config
+            .server_url
+            .as_ref()
+            .map(|url| url.as_str().to_string());
+        self.dashboard
+            .emit(DashboardInput::SetServerUrl(url_text.clone()));
+
+        match url_text {
+            Some(_) => {
+                self.page = Page::Dashboard;
+                self.settings.emit(SettingsInput::SetStatus(
+                    "Saved. Refreshing dashboard.".into(),
+                ));
+                self.start_fetch(sender);
+            }
+            None => {
+                self.page = Page::Welcome;
+                self.dashboard
+                    .emit(DashboardInput::SetStatus("Server URL removed.".into()));
+                self.settings.emit(SettingsInput::SetStatus(
+                    "Cleared URL. Returning to Welcome.".into(),
+                ));
+            }
+        }
+    }
+}
+
+/// Keep the shell's dark-mode class in sync with the active color scheme.
+///
+/// libadwaita already restyles its own widgets when the desktop switches between
+/// light and dark. This class exists only for the app's custom dashboard
+/// background, which needs to be a little darker in dark mode. Following
+/// `StyleManager` rather than the user's menu choice means it is also correct
+/// when the *system* theme changes while the app is running.
+fn track_dark_shell(shell: &gtk::Box) {
+    fn apply(shell: &gtk::Box, is_dark: bool) {
+        if is_dark {
+            shell.add_css_class("dark-app-shell");
+        } else {
+            shell.remove_css_class("dark-app-shell");
+        }
+    }
+
+    let style_manager = adw::StyleManager::default();
+    apply(shell, style_manager.is_dark());
+    style_manager.connect_dark_notify({
+        let shell = shell.clone();
+        move |style_manager| apply(&shell, style_manager.is_dark())
     });
-
-    *auto_refresh_source.borrow_mut() = Some(source);
 }
 
-fn normalized_refresh_interval(raw: u64) -> RefreshInterval {
-    RefreshInterval::clamped(raw)
-}
+/// Register the application-level actions used outside the window.
+///
+/// `app.show-dashboard` is what a notification's default action and its "Open
+/// Dashboard" button activate, so clicking an alert brings the app forward.
+fn install_app_actions(sender: &ComponentSender<App>) {
+    let app = relm4::main_application();
 
-fn install_app_actions(
-    app: &adw::Application,
-    window: &adw::ApplicationWindow,
-    stack: &Stack,
-    state: Rc<RefCell<AppState>>,
-) {
     let show_dashboard = gio::SimpleAction::new("show-dashboard", None);
     show_dashboard.connect_activate({
-        let window = window.clone();
-        let stack = stack.clone();
-        let state = state.clone();
+        let sender = sender.input_sender().clone();
         move |_, _| {
-            let target = if state.borrow().has_server_url() {
-                Page::Dashboard
-            } else {
-                Page::Settings
-            };
-            state.borrow_mut().set_page(target);
-            stack.set_visible_child_name(target.id());
-            window.present();
+            let _ = sender.send(AppInput::ShowWindow);
         }
     });
     app.add_action(&show_dashboard);
 
     let quit = gio::SimpleAction::new("quit", None);
     quit.connect_activate({
-        let app = app.clone();
-        move |_, _| app.quit()
+        let sender = sender.input_sender().clone();
+        move |_, _| {
+            let _ = sender.send(AppInput::Quit);
+        }
     });
     app.add_action(&quit);
-}
-
-pub(super) fn update_last_updated_text(last_updated: &Rc<RefCell<Option<Instant>>>, label: &Label) {
-    let text = match *last_updated.borrow() {
-        Some(last) => {
-            let elapsed = Instant::now().saturating_duration_since(last);
-            let seconds = elapsed.as_secs();
-            if seconds < 5 {
-                "Last updated: just now".to_string()
-            } else if seconds < 60 {
-                format!("Last updated: {seconds}s ago")
-            } else {
-                let minutes = seconds / 60;
-                let secs = seconds % 60;
-                format!("Last updated: {minutes}m {secs}s ago")
-            }
-        }
-        None => "Last updated: not yet".to_string(),
-    };
-    label.set_text(&text);
-}
-
-pub(super) fn apply_color_scheme(style_manager: &adw::StyleManager, theme_mode: ThemeMode) {
-    let scheme = match theme_mode {
-        ThemeMode::System => adw::ColorScheme::Default,
-        ThemeMode::Light => adw::ColorScheme::ForceLight,
-        ThemeMode::Dark => adw::ColorScheme::ForceDark,
-    };
-    style_manager.set_color_scheme(scheme);
-}
-
-pub(super) fn theme_mode_index(theme_mode: ThemeMode) -> u32 {
-    match theme_mode {
-        ThemeMode::System => 0,
-        ThemeMode::Light => 1,
-        ThemeMode::Dark => 2,
-    }
-}
-
-fn update_dark_shell_class(root: &GtkBox, is_dark: bool) {
-    // Libadwaita handles the general theme; this class is only for the app's
-    // custom dashboard shell background.
-    if is_dark {
-        root.add_css_class("dark-app-shell");
-    } else {
-        root.remove_css_class("dark-app-shell");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::normalized_refresh_interval;
-    use crate::config::MIN_REFRESH_INTERVAL_SECS;
-
-    #[test]
-    fn normalized_refresh_interval_enforces_minimum() {
-        assert_eq!(
-            normalized_refresh_interval(1).as_secs(),
-            MIN_REFRESH_INTERVAL_SECS
-        );
-        assert_eq!(normalized_refresh_interval(60).as_secs(), 60);
-    }
 }

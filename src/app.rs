@@ -1,52 +1,37 @@
 //! Application bootstrap.
 //!
-//! This module creates the libadwaita application object, loads persisted user
-//! configuration, and hands control to the UI module. Keeping this separate from
-//! `ui::app` makes startup easier to understand: this file owns the application
-//! lifecycle, while `src/ui/app.rs` owns windows and widgets.
+//! This module turns a process launch into a running Relm4 application: read the
+//! saved configuration, register icons and styles, then hand control to the root
+//! component in `ui::app`.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
-use adw::prelude::*;
+use relm4::RelmApp;
 
 use crate::app_info::APP_ID;
 use crate::config::read_config;
-use crate::state::AppState;
-use crate::ui;
+use crate::ui::{self, app::App};
+
+/// Command-line flags that mean "start hidden in the tray".
+///
+/// Desktop environments and autostart entries use different spellings, so all
+/// the common ones are accepted.
+const MINIMIZED_FLAGS: [&str; 4] = [
+    "--minimized",
+    "--background",
+    "--hidden",
+    "--start-minimized",
+];
 
 pub fn run() {
-    let run_minimized = std::env::args().any(|arg| {
-        matches!(
-            arg.as_str(),
-            "--minimized" | "--background" | "--hidden" | "--start-minimized"
-        )
-    });
-    let app = adw::Application::builder().application_id(APP_ID).build();
-
-    // GTK applications build their UI from the `activate` signal. The callback
-    // runs on the GTK main thread, which is also where all widget updates must
-    // happen.
-    app.connect_activate(move |app| build_ui(app, run_minimized));
-    app.run();
-}
-
-fn build_ui(app: &adw::Application, run_minimized: bool) {
+    let started_minimized = std::env::args().any(|arg| MINIMIZED_FLAGS.contains(&arg.as_str()));
     let loaded = read_config();
-    let config = loaded.config;
-    let server_url = config.server_url;
-    let refresh_interval = config.refresh_interval;
-    let notifications_enabled = config.notifications_enabled;
-    let start_minimized = config.start_minimized;
-    // `Rc<RefCell<_>>` is the common gtk-rs pattern for shared mutable state on
-    // the main thread. `Rc` lets signal handlers hold references to the same
-    // state, and `RefCell` performs borrow checks at runtime.
-    let state = Rc::new(RefCell::new(AppState::new(
-        server_url,
-        refresh_interval,
-        notifications_enabled,
-        start_minimized,
-        loaded.startup_notice,
-    )));
-    let _window = ui::build_main_window(app, state, run_minimized);
+    // Starting hidden is either a launch flag or a saved preference.
+    let visible_on_start = !(started_minimized || loaded.config.start_minimized);
+
+    let app = RelmApp::new(APP_ID);
+    // Resources must be registered before any widget asks for an icon by name,
+    // and the stylesheet before any widget is styled, so both happen here rather
+    // than inside the root component.
+    ui::register_resources();
+    relm4::set_global_css(ui::DASHBOARD_CSS);
+    app.visible_on_activate(visible_on_start).run::<App>(loaded);
 }

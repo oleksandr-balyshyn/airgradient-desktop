@@ -11,7 +11,9 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use adw::prelude::ApplicationExt;
+use relm4::adw;
+use relm4::gtk::gio;
+use relm4::gtk::prelude::ApplicationExt;
 
 use crate::alerts::{AlertNotification, AlertSeverity};
 
