@@ -19,7 +19,16 @@ description: |
   * CO2, TVOC, and NOx.
   * Particulate matter: PM0.3 count, PM1.0, PM2.5, and PM10.
   * Trend arrows comparing each reading to the previous one.
+  * A chart of recorded PM2.5, so a spike from cooking or outdoor smoke is
+    obvious rather than invisible in a single number.
   * The timestamp of the last successful update.
+
+  📈 **A History tab that remembers.**
+
+  Every reading is charted over time, with a low, average and high summary
+  for each. Measurements are recorded to disk, so the charts aren't empty
+  when you reopen the app — and the dashboard shows your last reading
+  immediately instead of a screen of dashes.
 
   🔔 **Notified before air quality becomes a problem.**
 
@@ -43,8 +52,12 @@ description: |
 
   🎨 **Built to feel native on Linux.**
 
-  * Written in Rust with GTK 4 and libadwaita for a fast, native GNOME look.
-  * Follows your system's light/dark theme.
+  * Written in Rust with Relm4, GTK 4 and libadwaita for a fast, native
+    GNOME look.
+  * Follows your system's light/dark theme, or pick from 54 named themes
+    including Catppuccin, Nord, Dracula, Gruvbox, Solarized and Tokyo Night.
+    Air-quality colors stay consistent in every one, because red should
+    always mean bad air.
   * Strictly confined, with network access only.
 
   ✅ **What you'll need:**

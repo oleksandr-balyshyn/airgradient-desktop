@@ -17,15 +17,29 @@
       keep open in a tab all day. Air Monitor solves this by putting a real
       dashboard, and real notifications, right on your GNOME desktop.
     </p>
-    <p>The dashboard shows, at a glance:</p>
+    <p>The Main tab shows, at a glance:</p>
     <ul>
       <li>Air Quality Index (AQI), color-coded for quick reading</li>
       <li>Temperature and humidity</li>
       <li>CO2, TVOC, and NOx</li>
       <li>Particulate matter: PM0.3 count, PM1.0, PM2.5, and PM10</li>
       <li>Trend arrows comparing each reading to the previous one</li>
+      <li>A chart of recorded PM2.5, so a spike from cooking or outdoor smoke
+      is obvious rather than invisible in a single number</li>
       <li>The timestamp of the last successful update</li>
     </ul>
+    <p>
+      The History tab charts every one of those readings over time, with a
+      low, average and high summary for each. Recorded measurements are kept
+      between sessions, so the charts are not empty when you reopen the app.
+    </p>
+    <p>
+      Appearance is yours to pick: follow the desktop's light or dark
+      preference, or choose from 54 named themes including Catppuccin, Nord,
+      Dracula, Gruvbox, Solarized, Tokyo Night and Everforest. Air-quality
+      colors stay consistent in every theme, because red should always mean
+      bad air.
+    </p>
     <p>
       Air Monitor watches incoming readings and raises desktop notifications
       when CO2, AQI, PM2.5, TVOC, NOx, or humidity drift outside healthy
