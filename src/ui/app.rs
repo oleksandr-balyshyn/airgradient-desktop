@@ -78,7 +78,42 @@ pub enum AppCommand {
     /// One second has passed.
     Tick,
     /// A fetch finished, successfully or not.
-    Fetched(Result<Box<AirMeasureSnapshot>, String>),
+    Fetched {
+        trigger: FetchTrigger,
+        result: Result<Box<AirMeasureSnapshot>, String>,
+    },
+}
+
+/// Why a measurement was fetched.
+///
+/// Only the automatic refresh contributes to the recorded history. A reading
+/// pulled because someone pressed Refresh or opened the dashboard is shown like
+/// any other, but recording it would put an extra point on the chart at whatever
+/// moment the button happened to be clicked, so the spacing of the series would
+/// describe the user's clicking rather than the air.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum FetchTrigger {
+    /// The automatic refresh, and the fetches that start its cadence: launching
+    /// the app, and saving settings that change which device is polled.
+    Scheduled,
+    /// Someone asked for fresh numbers now.
+    Manual,
+}
+
+impl FetchTrigger {
+    /// Whether a reading from this fetch belongs in the recorded history.
+    const fn records_history(self) -> bool {
+        matches!(self, Self::Scheduled)
+    }
+
+    /// Whether this fetch restarts the countdown to the next automatic refresh.
+    ///
+    /// A manual refresh must not, or the interval would be measured from the
+    /// last button press: holding Refresh down would postpone the recorded
+    /// readings indefinitely and leave a gap in the history.
+    const fn restarts_interval(self) -> bool {
+        matches!(self, Self::Scheduled)
+    }
 }
 
 pub struct App {
@@ -146,7 +181,7 @@ impl App {
     /// delivers the result back as an `AppCommand::Fetched` message.
     /// A fetch already running is left to finish rather than being duplicated;
     /// its result is just as fresh as a second request's would be.
-    fn start_fetch(&mut self, sender: &ComponentSender<Self>) {
+    fn start_fetch(&mut self, trigger: FetchTrigger, sender: &ComponentSender<Self>) {
         if self.fetch_in_flight {
             return;
         }
@@ -161,12 +196,11 @@ impl App {
         self.dashboard
             .emit(DashboardInput::SetStatus("Fetching measurements...".into()));
         self.fetch_in_flight = true;
-        sender.spawn_oneshot_command(move || {
-            AppCommand::Fetched(
-                fetch_current_measurements(&base_url)
-                    .map(Box::new)
-                    .map_err(|err| err.to_string()),
-            )
+        sender.spawn_oneshot_command(move || AppCommand::Fetched {
+            trigger,
+            result: fetch_current_measurements(&base_url)
+                .map(Box::new)
+                .map_err(|err| err.to_string()),
         });
     }
 
@@ -404,7 +438,7 @@ impl Component for App {
         });
 
         if model.has_server_url() {
-            model.start_fetch(&sender);
+            model.start_fetch(FetchTrigger::Scheduled, &sender);
         }
 
         let stack = &stack;
@@ -420,11 +454,11 @@ impl Component for App {
                 // Returning to the dashboard is an explicit request to see
                 // current data, so refresh while the user is looking at it.
                 if page == Page::Dashboard && self.has_server_url() {
-                    self.start_fetch(&sender);
+                    self.start_fetch(FetchTrigger::Manual, &sender);
                 }
             }
             AppInput::GoHome => sender.input(AppInput::Navigate(self.home_page())),
-            AppInput::Refresh => self.start_fetch(&sender),
+            AppInput::Refresh => self.start_fetch(FetchTrigger::Manual, &sender),
             AppInput::ShowWindow => {
                 self.page = if self.has_server_url() {
                     Page::Dashboard
@@ -467,15 +501,20 @@ impl Component for App {
             AppCommand::Tick => {
                 self.seconds_since_fetch = self.seconds_since_fetch.saturating_add(1);
                 if self.has_server_url() && self.seconds_since_fetch >= self.refresh_interval_secs {
-                    self.start_fetch(&sender);
+                    self.start_fetch(FetchTrigger::Scheduled, &sender);
                 }
             }
-            AppCommand::Fetched(Ok(snapshot)) => {
-                self.finish_fetch();
+            AppCommand::Fetched {
+                trigger,
+                result: Ok(snapshot),
+            } => {
+                self.finish_fetch(trigger);
                 self.last_updated = Some(Instant::now());
 
                 let mut snapshot = snapshot;
-                self.record(snapshot.as_ref().clone());
+                if trigger.records_history() {
+                    self.record(snapshot.as_ref().clone());
+                }
                 self.apply_nowcast_aqi(&mut snapshot);
 
                 for alert in self.alerts.evaluate(&snapshot) {
@@ -483,8 +522,11 @@ impl Component for App {
                 }
                 self.dashboard.emit(DashboardInput::Show(snapshot));
             }
-            AppCommand::Fetched(Err(err)) => {
-                self.finish_fetch();
+            AppCommand::Fetched {
+                trigger,
+                result: Err(err),
+            } => {
+                self.finish_fetch(trigger);
                 self.dashboard
                     .emit(DashboardInput::SetStatus(format!("Fetch failed: {err}")));
                 if let Some(alert) = self.alerts.record_fetch_error(&err) {
@@ -501,9 +543,11 @@ impl App {
     /// The countdown runs from when a fetch finishes, not from when it starts, so
     /// the configured interval is the gap between requests. Counting from the
     /// start would let a device slower than the interval be polled continuously.
-    fn finish_fetch(&mut self) {
+    fn finish_fetch(&mut self, trigger: FetchTrigger) {
         self.fetch_in_flight = false;
-        self.seconds_since_fetch = 0;
+        if trigger.restarts_interval() {
+            self.seconds_since_fetch = 0;
+        }
     }
 
     /// Hand the recorded history to both views.
@@ -581,7 +625,7 @@ impl App {
                 self.settings.emit(SettingsInput::SetStatus(
                     "Saved. Refreshing dashboard.".into(),
                 ));
-                self.start_fetch(sender);
+                self.start_fetch(FetchTrigger::Scheduled, sender);
             }
             None => {
                 self.page = Page::Welcome;
@@ -619,4 +663,27 @@ fn install_app_actions(sender: &ComponentSender<App>) {
         }
     });
     app.add_action(&quit);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FetchTrigger;
+
+    #[test]
+    fn only_scheduled_fetches_are_recorded() {
+        assert!(FetchTrigger::Scheduled.records_history());
+        assert!(
+            !FetchTrigger::Manual.records_history(),
+            "pressing Refresh must not add a point to the chart"
+        );
+    }
+
+    #[test]
+    fn only_scheduled_fetches_restart_the_interval() {
+        assert!(FetchTrigger::Scheduled.restarts_interval());
+        assert!(
+            !FetchTrigger::Manual.restarts_interval(),
+            "a manual refresh must not postpone the next recorded reading"
+        );
+    }
 }

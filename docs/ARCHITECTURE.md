@@ -85,8 +85,8 @@ ticker fires (once a second)
            -> device::fetch_current_measurements()
                 HTTP GET {base_url}/measures/current
                 sensors::parse_air_measurements()
-      -> AppCommand::Fetched(Ok(snapshot))          back on the UI thread
-           history.push(Sample::now(snapshot))
+      -> AppCommand::Fetched{ trigger, Ok(snapshot) }   back on the UI thread
+           history.push(Sample::now(snapshot))            scheduled fetches only
            history.save()
            alerts.evaluate(&snapshot)  -> notifications::send_air_quality_notification()
            dashboard.emit(DashboardInput::Show(snapshot))
@@ -101,6 +101,14 @@ a device is slow or unreachable.
 
 The recorded history is shared with both views as one reference-counted
 allocation, because copying a day of readings twice per refresh would be waste.
+
+Only the automatic refresh records. A fetch started because someone pressed
+Refresh or reopened the dashboard is displayed like any other, but it is not
+written to the history and it does not restart the interval countdown. Recording
+it would add a point at whatever moment the button was clicked, so the spacing of
+the series would describe the clicking rather than the air; restarting the
+countdown would let repeated clicks postpone the recorded readings indefinitely.
+`FetchTrigger` carries that distinction from the call site to the result handler.
 
 ## Timers
 
