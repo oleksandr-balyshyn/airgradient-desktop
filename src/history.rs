@@ -33,6 +33,9 @@ use crate::storage::write_atomically;
 /// hours, a 5-minute interval keeps ten days.
 pub const CAPACITY: usize = 2_880;
 
+/// Seconds in an hour, used to bucket samples for hourly means.
+const SECONDS_PER_HOUR: u64 = 3_600;
+
 /// One recorded measurement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sample {
@@ -122,6 +125,39 @@ impl History {
             .collect()
     }
 
+    /// Mean of one metric for each of the last `hours` hours, most recent first.
+    ///
+    /// An hour with no readings is `None` rather than zero, so a gap in
+    /// recording is not mistaken for perfectly clean air. This is the shape the
+    /// EPA NowCast expects; see `sensors::aqi::nowcast`.
+    pub fn hourly_means(
+        &self,
+        now: u64,
+        hours: usize,
+        metric: impl Fn(&AirMeasureSnapshot) -> Option<f32>,
+    ) -> Vec<Option<f32>> {
+        let mut totals = vec![(0.0_f32, 0_usize); hours];
+
+        for sample in &self.samples {
+            let Some(value) = metric(&sample.snapshot) else {
+                continue;
+            };
+            // A sample stamped in the future, which a clock change can produce,
+            // counts as belonging to the current hour rather than overflowing.
+            let hours_ago = (now.saturating_sub(sample.recorded_at) / SECONDS_PER_HOUR) as usize;
+            let Some(bucket) = totals.get_mut(hours_ago) else {
+                continue;
+            };
+            bucket.0 += value;
+            bucket.1 += 1;
+        }
+
+        totals
+            .into_iter()
+            .map(|(sum, count)| (count > 0).then(|| sum / count as f32))
+            .collect()
+    }
+
     /// Read history from disk.
     ///
     /// A missing or unreadable file is not an error: history is recorded data
@@ -178,6 +214,11 @@ impl History {
     pub fn save(&self) -> io::Result<()> {
         self.save_to_path(&history_path())
     }
+}
+
+/// The current time, in seconds since the Unix epoch.
+pub fn unix_now() -> u64 {
+    unix_seconds(SystemTime::now())
 }
 
 /// Seconds since the Unix epoch, clamped at the epoch itself.
@@ -313,6 +354,51 @@ mod tests {
             vec![7.0, 8.0, 9.0, 10.0]
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn hourly_means_average_each_hour_separately() {
+        const HOUR: u64 = 3_600;
+        let mut history = History::default();
+        // Two readings in the current hour and one three hours back.
+        for (recorded_at, pm25) in [
+            (1_000 * HOUR, 10.0),
+            (1_000 * HOUR, 20.0),
+            (997 * HOUR, 4.0),
+        ] {
+            history.push(Sample {
+                recorded_at,
+                snapshot: AirMeasureSnapshot {
+                    pm25: Some(pm25),
+                    ..AirMeasureSnapshot::default()
+                },
+            });
+        }
+
+        let means = history.hourly_means(1_000 * HOUR, 5, |snapshot| snapshot.pm25);
+
+        assert_eq!(
+            means[0],
+            Some(15.0),
+            "the current hour averages its two readings"
+        );
+        assert_eq!(means[1], None, "an hour with no readings stays empty");
+        assert_eq!(means[2], None);
+        assert_eq!(means[3], Some(4.0));
+        assert_eq!(means[4], None);
+    }
+
+    #[test]
+    fn hourly_means_skip_readings_the_sensor_did_not_report() {
+        let mut history = History::default();
+        history.push(Sample {
+            recorded_at: 3_600,
+            snapshot: AirMeasureSnapshot::default(),
+        });
+
+        let means = history.hourly_means(3_600, 2, |snapshot| snapshot.pm25);
+
+        assert_eq!(means[0], None, "a missing reading must not count as zero");
     }
 
     #[test]

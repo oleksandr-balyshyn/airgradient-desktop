@@ -33,8 +33,9 @@ use crate::alerts::{AlertMonitor, AlertNotification, AlertSeverity};
 use crate::app_info::APP_NAME;
 use crate::config::{self, AppConfig, LoadedConfig};
 use crate::device::{fetch_current_measurements, DeviceBaseUrl};
-use crate::history::{History, Sample};
+use crate::history::{unix_now, History, Sample};
 use crate::notifications::send_air_quality_notification;
+use crate::sensors::aqi::{nowcast, pm25_to_aqi, NOWCAST_HOURS};
 use crate::sensors::AirMeasureSnapshot;
 use crate::state::Page;
 use crate::theme::{self, Theme};
@@ -472,7 +473,11 @@ impl Component for App {
             AppCommand::Fetched(Ok(snapshot)) => {
                 self.finish_fetch();
                 self.last_updated = Some(Instant::now());
+
+                let mut snapshot = snapshot;
                 self.record(snapshot.as_ref().clone());
+                self.apply_nowcast_aqi(&mut snapshot);
+
                 for alert in self.alerts.evaluate(&snapshot) {
                     Self::deliver(alert);
                 }
@@ -525,6 +530,29 @@ impl App {
         }
 
         self.publish_history();
+    }
+
+    /// Replace the snapshot's instantaneous AQI with the EPA NowCast.
+    ///
+    /// The AQI is defined over a 24-hour average, so converting a single
+    /// instantaneous reading overstates short events badly: frying something for
+    /// two minutes can push an indoor sensor into "Unhealthy" when the air over
+    /// any meaningful period was fine. AirNow and PurpleAir both report the
+    /// NowCast instead, a weighted average of the last 12 hours that still
+    /// reacts quickly to a real change.
+    ///
+    /// This runs after the new reading has been recorded, so the current hour
+    /// includes it. Until two hours of history exist the NowCast is undefined and
+    /// the instantaneous value computed at parse time is left in place, which is
+    /// also what a freshly installed app should show.
+    fn apply_nowcast_aqi(&self, snapshot: &mut AirMeasureSnapshot) {
+        let hourly = self
+            .history
+            .hourly_means(unix_now(), NOWCAST_HOURS, |sample| sample.pm25);
+
+        if let Some(smoothed) = nowcast(&hourly) {
+            snapshot.aqi = Some(pm25_to_aqi(smoothed));
+        }
     }
 
     /// Persist a validated configuration and apply it to the running app.

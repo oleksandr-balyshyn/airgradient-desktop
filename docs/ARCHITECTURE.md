@@ -125,6 +125,7 @@ testable without a display. Most of the test suite lives here.
 | Module | Responsibility |
 | --- | --- |
 | `sensors::air_quality` | Parse device JSON into `AirMeasureSnapshot` |
+| `sensors::aqi` | EPA breakpoints and the NowCast smoothing |
 | `sensors::thresholds` | Classify a reading as green/yellow/orange/red |
 | `device` | Normalize base URLs, perform the HTTP request |
 | `config` | Read and write `config.json` |
@@ -139,6 +140,29 @@ testable without a display. Most of the test suite lives here.
 The rule to preserve: **domain logic decides what a reading means; the UI decides
 how it looks.** `thresholds` returns `StatusColor::Red`; `ui::status` turns that
 into the class name `"status-red"`; `dashboard.css` decides what red looks like.
+
+## The Air Quality Index
+
+Two details make the difference between a plausible AQI and a correct one.
+
+The index is computed from `pm02Compensated`, the device's own corrected
+particulate reading, not the raw `pm02`. AirGradient applies its batch and EPA
+corrections to produce it, and it is what the vendor's dashboard shows. Current
+firmware quantizes the raw field to whole micrograms, so a room genuinely at
+3 ug/m3 reports `pm02: 0` and would otherwise display an AQI of 0.
+
+The displayed value is the EPA **NowCast** rather than a direct conversion of the
+latest reading. The AQI is defined over a 24-hour average, so converting one
+instantaneous sample overstates brief events: two minutes of frying can push an
+indoor sensor into "Unhealthy" when the air over any meaningful period was fine.
+The NowCast is a weighted average of the last 12 hourly means, weighted toward
+recent hours when readings are changing, which is what AirNow and PurpleAir
+report. Sustained pollution still shows in full; only short spikes are damped.
+Until two hours of history exist the NowCast is undefined and the instantaneous
+value is shown.
+
+The breakpoints are the 2024 revision, effective 6 May 2024, which lowered the
+top of "Good" from 12.0 to 9.0 ug/m3 and tightened the bands above it.
 
 ## Missing Readings
 
