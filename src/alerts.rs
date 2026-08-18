@@ -11,6 +11,11 @@ use crate::sensors::AirMeasureSnapshot;
 
 const ALERT_COOLDOWN_SECS: u64 = 20 * 60;
 const ALERT_CONSECUTIVE_READINGS: u8 = 2;
+/// Failed fetches in a row before the device is reported as offline.
+///
+/// A single miss is normal on a busy wifi network, so alerting on one would make
+/// the notification meaningless.
+const OFFLINE_AFTER_FAILURES: u8 = 3;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 enum AlertKind {
@@ -221,7 +226,7 @@ impl AlertMonitor {
         }
 
         self.fetch_failures = self.fetch_failures.saturating_add(1);
-        if self.fetch_failures < 3 {
+        if self.fetch_failures < OFFLINE_AFTER_FAILURES {
             return None;
         }
 

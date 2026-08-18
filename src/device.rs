@@ -67,7 +67,6 @@ pub enum DeviceError {
     InvalidUrl(url::ParseError),
     UnsupportedScheme(String),
     MissingHost,
-    NotConfigured,
     HttpClient(reqwest::Error),
     Request(reqwest::Error),
     HttpStatus(reqwest::StatusCode),
@@ -82,7 +81,6 @@ impl fmt::Display for DeviceError {
                 write!(f, "Invalid URL scheme '{scheme}'. Use http or https.")
             }
             Self::MissingHost => f.write_str("URL missing host component."),
-            Self::NotConfigured => f.write_str("No server URL configured."),
             Self::HttpClient(err) => write!(f, "HTTP client error: {err}"),
             Self::Request(err) => write!(f, "Request failed: {err}"),
             Self::HttpStatus(status) => write!(f, "Server returned HTTP {status}"),

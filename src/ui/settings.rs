@@ -74,10 +74,10 @@ impl Settings {
         let server_url =
             DeviceBaseUrl::parse(&self.url_text).map_err(|err| format!("Invalid URL: {err}"))?;
 
-        let seconds = (self.interval_secs.round() as u64)
-            .clamp(MIN_REFRESH_INTERVAL_SECS, MAX_REFRESH_INTERVAL_SECS);
-        let refresh_interval =
-            RefreshInterval::new(seconds).map_err(|err| format!("Invalid interval: {err}"))?;
+        // The spin row already limits the range, so a value outside it means the
+        // form and the config disagree rather than that the user asked for
+        // something impossible. Clamping keeps the bounds defined in one place.
+        let refresh_interval = RefreshInterval::clamped(self.interval_secs.round() as u64);
 
         Ok(AppConfig {
             server_url,
