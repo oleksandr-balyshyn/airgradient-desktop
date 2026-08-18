@@ -15,7 +15,7 @@
 
 use std::collections::VecDeque;
 use std::env;
-use std::fs::{create_dir_all, read_to_string, write};
+use std::fs::read_to_string;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::sensors::AirMeasureSnapshot;
+use crate::storage::write_atomically;
 
 /// How many samples to keep.
 ///
@@ -148,13 +149,8 @@ impl History {
     }
 
     pub fn save_to_path(&self, path: &Path) -> io::Result<()> {
-        if let Some(directory) = path.parent() {
-            create_dir_all(directory)?;
-        }
-
-        let samples: Vec<&Sample> = self.samples.iter().collect();
-        let raw = serde_json::to_string(&samples).map_err(io::Error::other)?;
-        write(path, raw)
+        let raw = serde_json::to_string(&self.samples).map_err(io::Error::other)?;
+        write_atomically(path, &raw)
     }
 
     /// Write history to the standard location.

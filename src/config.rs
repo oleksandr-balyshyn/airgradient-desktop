@@ -6,13 +6,14 @@
 
 use std::env;
 use std::fmt;
-use std::fs::{create_dir_all, read_to_string, write};
+use std::fs::read_to_string;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::device::DeviceBaseUrl;
+use crate::storage::write_atomically;
 use crate::theme::DEFAULT_THEME_ID;
 
 pub const DEFAULT_REFRESH_INTERVAL_SECS: u64 = 30;
@@ -195,17 +196,12 @@ pub fn read_config_from_path(path: &Path) -> LoadedConfig {
 }
 
 pub fn write_config(config: &AppConfig) -> io::Result<()> {
-    let config_dir = config_dir();
-    create_dir_all(&config_dir)?;
     write_config_to_path(&config_path(), config)
 }
 
 pub fn write_config_to_path(path: &Path, config: &AppConfig) -> io::Result<()> {
-    if let Some(config_dir) = path.parent() {
-        create_dir_all(config_dir)?;
-    }
     let raw = serde_json::to_string_pretty(config).map_err(io::Error::other)?;
-    write(path, raw)
+    write_atomically(path, &raw)
 }
 
 pub fn config_path() -> PathBuf {
