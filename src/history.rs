@@ -130,11 +130,32 @@ impl History {
     pub fn load_from_path(path: &Path, capacity: usize) -> Self {
         let mut history = Self::with_capacity(capacity);
 
-        let Ok(raw) = read_to_string(path) else {
-            return history;
+        let raw = match read_to_string(path) {
+            Ok(raw) => raw,
+            // A first launch has no file yet, which is ordinary and silent.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return history,
+            Err(err) => {
+                eprintln!(
+                    "Could not read measurement history from {}: {err}",
+                    path.display()
+                );
+                return history;
+            }
         };
-        let Ok(samples) = serde_json::from_str::<Vec<Sample>>(&raw) else {
-            return history;
+
+        let samples = match serde_json::from_str::<Vec<Sample>>(&raw) {
+            Ok(samples) => samples,
+            Err(err) => {
+                // Starting over is the right recovery -- these are readings the
+                // app can collect again -- but saying so matters, because the
+                // next save overwrites the unreadable file and whatever was in
+                // it is gone for good.
+                eprintln!(
+                    "Measurement history at {} is unreadable and will be replaced: {err}",
+                    path.display()
+                );
+                return history;
+            }
         };
 
         for sample in samples {
