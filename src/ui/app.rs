@@ -85,8 +85,14 @@ pub struct App {
     server_url: Option<DeviceBaseUrl>,
     /// Seconds between automatic refreshes.
     refresh_interval_secs: u64,
-    /// Ticks counted since the last fetch was started.
+    /// Ticks counted since the last fetch finished.
     seconds_since_fetch: u64,
+    /// Whether a fetch is already on the blocking pool.
+    ///
+    /// The shortest refresh interval (5s) is under the request timeout (8s), so
+    /// a slow device would otherwise stack up overlapping requests, and an early
+    /// reply arriving after a late one would be recorded as the newer reading.
+    fetch_in_flight: bool,
     last_updated: Option<Instant>,
     /// Recorded measurements, kept across restarts.
     history: History,
@@ -137,8 +143,12 @@ impl App {
     /// `fetch_current_measurements` blocks, so it must not run on the UI thread.
     /// `spawn_oneshot_command` puts it on Relm4's blocking thread pool and
     /// delivers the result back as an `AppCommand::Fetched` message.
+    /// A fetch already running is left to finish rather than being duplicated;
+    /// its result is just as fresh as a second request's would be.
     fn start_fetch(&mut self, sender: &ComponentSender<Self>) {
-        self.seconds_since_fetch = 0;
+        if self.fetch_in_flight {
+            return;
+        }
 
         let Some(base_url) = self.server_url.clone() else {
             self.dashboard.emit(DashboardInput::SetStatus(
@@ -149,6 +159,7 @@ impl App {
 
         self.dashboard
             .emit(DashboardInput::SetStatus("Fetching measurements...".into()));
+        self.fetch_in_flight = true;
         sender.spawn_oneshot_command(move || {
             AppCommand::Fetched(
                 fetch_current_measurements(&base_url)
@@ -342,6 +353,7 @@ impl Component for App {
             server_url: config.server_url.clone(),
             refresh_interval_secs: config.refresh_interval.as_secs(),
             seconds_since_fetch: 0,
+            fetch_in_flight: false,
             last_updated: None,
             history: History::load(),
             alerts: AlertMonitor::new(config.notifications_enabled),
@@ -458,6 +470,7 @@ impl Component for App {
                 }
             }
             AppCommand::Fetched(Ok(snapshot)) => {
+                self.finish_fetch();
                 self.last_updated = Some(Instant::now());
                 self.record(snapshot.as_ref().clone());
                 for alert in self.alerts.evaluate(&snapshot) {
@@ -466,6 +479,7 @@ impl Component for App {
                 self.dashboard.emit(DashboardInput::Show(snapshot));
             }
             AppCommand::Fetched(Err(err)) => {
+                self.finish_fetch();
                 self.dashboard
                     .emit(DashboardInput::SetStatus(format!("Fetch failed: {err}")));
                 if let Some(alert) = self.alerts.record_fetch_error(&err) {
@@ -477,6 +491,16 @@ impl Component for App {
 }
 
 impl App {
+    /// Mark the outstanding fetch as done and restart the interval countdown.
+    ///
+    /// The countdown runs from when a fetch finishes, not from when it starts, so
+    /// the configured interval is the gap between requests. Counting from the
+    /// start would let a device slower than the interval be polled continuously.
+    fn finish_fetch(&mut self) {
+        self.fetch_in_flight = false;
+        self.seconds_since_fetch = 0;
+    }
+
     /// Hand the recorded history to both views.
     ///
     /// One allocation is shared between them: a day of readings copied twice per
