@@ -211,9 +211,16 @@ fn has_nested_key(raw: &Value, key: &str) -> bool {
     }
 }
 
+/// Convert a PM2.5 concentration in ug/m3 to a US EPA Air Quality Index value.
+///
+/// Used only when the device does not report an AQI directly, which is the
+/// common case: current AirGradient firmware exposes particulate concentrations
+/// and no AQI field, so this is where almost every AQI the app displays is
+/// produced.
 fn pm25_to_us_aqi(pm25: f32) -> f32 {
-    // US AQI linear interpolation breakpoints for PM2.5 concentration. This is
-    // used only when the device does not report an AQI value directly.
+    /// EPA breakpoints as (concentration low, concentration high, AQI low, AQI
+    /// high). Each row maps a concentration band onto an AQI band, and the value
+    /// is interpolated linearly between the two.
     const BREAKPOINTS: [(f32, f32, f32, f32); 6] = [
         (0.0, 12.0, 0.0, 50.0),
         (12.1, 35.4, 51.0, 100.0),
@@ -222,25 +229,38 @@ fn pm25_to_us_aqi(pm25: f32) -> f32 {
         (150.5, 250.4, 201.0, 300.0),
         (250.5, 500.4, 301.0, 500.0),
     ];
+    /// AQI reported for anything above the top of the table.
+    const MAX_AQI: f32 = 500.0;
+    /// The EPA publishes its breakpoints to one decimal place.
+    const CONCENTRATION_PRECISION: f32 = 10.0;
 
-    for (c_low, c_high, i_low, i_high) in BREAKPOINTS {
-        if pm25 >= c_low && pm25 <= c_high {
-            return ((i_high - i_low) / (c_high - c_low)) * (pm25 - c_low) + i_low;
+    if pm25 <= 0.0 {
+        return 0.0;
+    }
+
+    // The bands are contiguous only at one decimal place: the first ends at 12.0
+    // and the second begins at 12.1, so a raw reading of 12.05 sits between them
+    // and belongs to neither. Truncating to the published precision first, as the
+    // EPA method specifies, is what closes those gaps.
+    let concentration = (pm25 * CONCENTRATION_PRECISION).floor() / CONCENTRATION_PRECISION;
+
+    for (c_low, c_high, aqi_low, aqi_high) in BREAKPOINTS {
+        if concentration <= c_high {
+            // Clamping to the band's own floor makes falling through impossible
+            // even if float rounding leaves a truncated value just below it.
+            let inside_band = concentration.max(c_low);
+            return ((aqi_high - aqi_low) / (c_high - c_low)) * (inside_band - c_low) + aqi_low;
         }
     }
 
-    if pm25 < 0.0 {
-        0.0
-    } else {
-        500.0
-    }
+    MAX_AQI
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{parse_air_measurements, GasUnit};
+    use super::{parse_air_measurements, pm25_to_us_aqi, GasUnit};
 
     #[test]
     fn parses_airgradient_local_server_payload() {
@@ -309,5 +329,70 @@ mod tests {
         assert_eq!(snapshot.nox, Some(3.0));
         assert_eq!(snapshot.nox_unit, Some(GasUnit::Index));
         assert_eq!(snapshot.pm003_count, Some(1200.0));
+    }
+
+    /// Every concentration must land in some band.
+    ///
+    /// The EPA bands are contiguous only to one decimal place, so a reading that
+    /// falls between two of them -- 12.05 sits above the first band's 12.0 and
+    /// below the second's 12.1 -- used to match no row at all and drop through to
+    /// the "off the top of the table" result of 500, the worst AQI there is. A
+    /// clean 12.05 ug/m3 was reported as hazardous, which also fired a critical
+    /// air-quality alert.
+    #[test]
+    fn concentrations_between_published_bands_stay_in_the_lower_band() {
+        for (concentration, expected) in [
+            (12.05, 50.0),
+            (35.45, 100.0),
+            (55.45, 150.0),
+            (150.45, 200.0),
+            (250.45, 300.0),
+        ] {
+            assert_eq!(
+                pm25_to_us_aqi(concentration),
+                expected,
+                "pm2.5 of {concentration} should read as AQI {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn aqi_never_exceeds_the_band_a_reading_belongs_to() {
+        // Sweep the whole plausible sensor range in 0.01 steps: no input may
+        // produce an AQI that jumps outside the band its neighbours are in.
+        let mut previous = 0.0_f32;
+        for step in 0..60_000 {
+            let concentration = step as f32 * 0.01;
+            let aqi = pm25_to_us_aqi(concentration);
+
+            assert!(
+                (0.0..=500.0).contains(&aqi),
+                "pm2.5 of {concentration} produced an out-of-range AQI of {aqi}"
+            );
+            assert!(
+                aqi >= previous - 0.5,
+                "AQI fell from {previous} to {aqi} as pm2.5 rose to {concentration}"
+            );
+            previous = aqi;
+        }
+    }
+
+    #[test]
+    fn aqi_covers_the_documented_boundaries() {
+        assert_eq!(pm25_to_us_aqi(0.0), 0.0);
+        assert_eq!(
+            pm25_to_us_aqi(-5.0),
+            0.0,
+            "a negative reading is not hazardous"
+        );
+        assert_eq!(pm25_to_us_aqi(12.0), 50.0);
+        assert_eq!(pm25_to_us_aqi(12.1), 51.0);
+        assert_eq!(pm25_to_us_aqi(35.4), 100.0);
+        assert_eq!(pm25_to_us_aqi(500.4), 500.0);
+        assert_eq!(
+            pm25_to_us_aqi(900.0),
+            500.0,
+            "above the table is the maximum"
+        );
     }
 }
