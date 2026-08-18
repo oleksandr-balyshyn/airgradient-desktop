@@ -56,6 +56,24 @@
   <launchable type="desktop-id">com.airgradient.desktop.desktop</launchable>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.2.0" date="2026-08-18">
+      <description>
+        <p>
+          The interface has been rebuilt and gains history. Readings are now
+          recorded to disk and kept across restarts.
+        </p>
+        <ul>
+          <li>New Main and History tabs, with a chart of PM2.5 over time</li>
+          <li>Every measurement charted on its own card, with low, average and high</li>
+          <li>57 colour themes</li>
+          <li>Air Quality Index corrected: computed from the device's compensated
+              PM2.5 reading, using the 2024 EPA breakpoints and the EPA NowCast
+              rather than a single instantaneous sample</li>
+          <li>Settings and measurement history are now written atomically, so an
+              interrupted write cannot corrupt either file</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.2" date="2026-06-13" />
     <release version="0.1.1" date="2026-06-13" />
     <release version="0.1.0" date="2026-06-07" />
