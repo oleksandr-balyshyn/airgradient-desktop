@@ -56,6 +56,15 @@
   <launchable type="desktop-id">com.airgradient.desktop.desktop</launchable>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.2.1" date="2026-08-18">
+      <description>
+        <p>
+          Measurement history now records one reading per refresh interval.
+          Pressing Refresh shows fresh numbers without adding an extra point to
+          the charts, and no longer postpones the next scheduled reading.
+        </p>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-08-18">
       <description>
         <p>
