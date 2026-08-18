@@ -16,7 +16,7 @@ use super::metric_card::{MetricCard, MetricCardInit, MetricCardInput};
 use super::metrics::{self, PM25_ID};
 use super::sensor_card::{CardSize, Reading, SensorCard, SensorCardInit, SensorCardInput};
 use super::status::class_for;
-use super::trend::Trend;
+use super::trend::{Preference, Trend};
 use crate::sensors::thresholds::{
     co2_status_color, nox_status_color, pm25_status_color, tvoc_status_color,
 };
@@ -98,7 +98,7 @@ impl Dashboard {
                 snapshot.co2,
                 previous.and_then(|previous| previous.co2),
                 "ppm",
-                true,
+                Preference::LowerIsBetter,
             ),
         }));
 
@@ -111,7 +111,7 @@ impl Dashboard {
                 snapshot.tvoc,
                 previous.and_then(|previous| previous.tvoc),
                 tvoc_unit,
-                true,
+                Preference::LowerIsBetter,
             ),
         }));
 
@@ -124,7 +124,7 @@ impl Dashboard {
                 snapshot.nox,
                 previous.and_then(|previous| previous.nox),
                 nox_unit,
-                true,
+                Preference::LowerIsBetter,
             ),
         }));
 
@@ -136,7 +136,7 @@ impl Dashboard {
                 snapshot.pm003_count,
                 previous.and_then(|previous| previous.pm003_count),
                 "count",
-                true,
+                Preference::LowerIsBetter,
             ),
         }));
         self.pm1.emit(SensorCardInput::Show(Reading {
@@ -147,7 +147,7 @@ impl Dashboard {
                 snapshot.pm1,
                 previous.and_then(|previous| previous.pm1),
                 "µg/m³",
-                true,
+                Preference::LowerIsBetter,
             ),
         }));
         self.pm25.emit(SensorCardInput::Show(Reading {
@@ -158,7 +158,7 @@ impl Dashboard {
                 snapshot.pm25,
                 previous.and_then(|previous| previous.pm25),
                 "µg/m³",
-                true,
+                Preference::LowerIsBetter,
             ),
         }));
         self.pm10.emit(SensorCardInput::Show(Reading {
@@ -169,7 +169,7 @@ impl Dashboard {
                 snapshot.pm10,
                 previous.and_then(|previous| previous.pm10),
                 "µg/m³",
-                true,
+                Preference::LowerIsBetter,
             ),
         }));
     }

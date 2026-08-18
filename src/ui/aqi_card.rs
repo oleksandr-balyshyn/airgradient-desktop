@@ -8,7 +8,7 @@ use relm4::gtk::prelude::*;
 use relm4::{gtk, prelude::*};
 
 use super::status::aqi_class;
-use super::trend::{format_metric_value, Trend};
+use super::trend::{format_metric_value, Preference, Trend};
 
 #[derive(Debug)]
 pub enum AqiCardInput {
@@ -148,7 +148,7 @@ impl SimpleComponent for AqiCard {
         match message {
             AqiCardInput::Show { value, previous } => {
                 self.value = value;
-                self.trend = Trend::between(value, previous, "AQI", true);
+                self.trend = Trend::between(value, previous, "AQI", Preference::LowerIsBetter);
             }
         }
     }

@@ -8,7 +8,7 @@
 use relm4::gtk::prelude::*;
 use relm4::{gtk, prelude::*};
 
-use super::trend::Trend;
+use super::trend::{Preference, Trend};
 
 /// Which environmental reading a card shows.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -196,7 +196,7 @@ impl SimpleComponent for EnvironmentCard {
                 // a "lower is better" scale, so a rising value is not inherently
                 // worse. `lower_is_better: true` keeps the arrow colors matching
                 // the previous release's behavior.
-                self.trend = Trend::between(value, previous, self.kind.unit(), true);
+                self.trend = Trend::between(value, previous, self.kind.unit(), Preference::Neither);
             }
         }
     }
