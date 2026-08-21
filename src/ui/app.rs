@@ -578,7 +578,6 @@ impl App {
         }
     }
 
-    /// Persist a validated configuration and apply it to the running app.
     /// Make the running app match a configuration.
     ///
     /// These are the effects a config has on a live app, and they are the same
@@ -602,6 +601,7 @@ impl App {
             .emit(DashboardInput::SetServerUrl(config.server_url_text()));
     }
 
+    /// Persist a validated configuration and apply it to the running app.
     fn save_config(&mut self, config: AppConfig, sender: &ComponentSender<Self>) {
         if let Err(err) = config::write_config(&config) {
             self.settings

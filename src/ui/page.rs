@@ -1,9 +1,10 @@
 //! The pages the main window can show.
 //!
-//! Persisted settings live in `config.rs`, colours in `theme.rs`, and everything
-//! else about the running app is held by the Relm4 component that owns it. What
-//! remains here is the page list, which the root component and the pages
-//! themselves both need to agree on.
+//! `Page::id()` returns the name a page's widget is registered under in the root
+//! `gtk::Stack`, so switching pages is a lookup by a value the compiler checks
+//! rather than a bare string spelled out twice. `ui::app` owns that stack and
+//! the current page, and is the only consumer: the page components themselves
+//! never refer to this enum.
 
 /// The pages the window can show.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
