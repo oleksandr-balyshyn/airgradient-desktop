@@ -16,10 +16,7 @@ use crate::config::{
     AppConfig, RefreshInterval, MAX_REFRESH_INTERVAL_SECS, MIN_REFRESH_INTERVAL_SECS,
 };
 use crate::device::DeviceBaseUrl;
-use crate::sensors::comfort::{
-    ComfortRange, ComfortThresholds, Dimension, MAX_HUMIDITY_PCT, MAX_TEMPERATURE_C,
-    MIN_HUMIDITY_PCT, MIN_TEMPERATURE_C,
-};
+use crate::sensors::comfort::{ComfortRange, ComfortThresholds, Dimension};
 use crate::theme::{self, Theme};
 
 /// What the settings page needs to render its initial values.
@@ -127,6 +124,19 @@ impl Settings {
     /// file stores a normalized base URL such as `http://192.168.1.201`. Doing
     /// that conversion here means the fetch code never has to guess, and an
     /// unusable value is never written to disk.
+    /// How far a comfort spin row may be moved.
+    ///
+    /// Taken from the dimension rather than written into the widget, so the
+    /// range a user can pick and the range a config file may contain are the
+    /// same numbers stated once.
+    fn limit(&self, dimension: Dimension, bound: Bound) -> f64 {
+        let (lowest, highest) = dimension.limits();
+        f64::from(match bound {
+            Bound::Min => lowest,
+            Bound::Max => highest,
+        })
+    }
+
     /// Store one edited comfort bound.
     fn set_comfort_bound(&mut self, dimension: Dimension, bound: Bound, value: f64) {
         let form = match dimension {
@@ -288,8 +298,8 @@ impl SimpleComponent for Settings {
                     set_subtitle: "Below this, the room is reported as cool (°C)",
                     set_adjustment: Some(&gtk::Adjustment::new(
                         model.temperature.min,
-                        f64::from(MIN_TEMPERATURE_C),
-                        f64::from(MAX_TEMPERATURE_C),
+                        model.limit(Dimension::Temperature, Bound::Min),
+                        model.limit(Dimension::Temperature, Bound::Max),
                         0.5,
                         1.0,
                         0.0,
@@ -310,8 +320,8 @@ impl SimpleComponent for Settings {
                     set_subtitle: "Above this, the room is reported as warm (°C)",
                     set_adjustment: Some(&gtk::Adjustment::new(
                         model.temperature.max,
-                        f64::from(MIN_TEMPERATURE_C),
-                        f64::from(MAX_TEMPERATURE_C),
+                        model.limit(Dimension::Temperature, Bound::Min),
+                        model.limit(Dimension::Temperature, Bound::Max),
                         0.5,
                         1.0,
                         0.0,
@@ -332,8 +342,8 @@ impl SimpleComponent for Settings {
                     set_subtitle: "Below this, the room is reported as dry (%)",
                     set_adjustment: Some(&gtk::Adjustment::new(
                         model.humidity.min,
-                        f64::from(MIN_HUMIDITY_PCT),
-                        f64::from(MAX_HUMIDITY_PCT),
+                        model.limit(Dimension::Humidity, Bound::Min),
+                        model.limit(Dimension::Humidity, Bound::Max),
                         1.0,
                         5.0,
                         0.0,
@@ -353,8 +363,8 @@ impl SimpleComponent for Settings {
                     set_subtitle: "Above this, the room is reported as humid (%)",
                     set_adjustment: Some(&gtk::Adjustment::new(
                         model.humidity.max,
-                        f64::from(MIN_HUMIDITY_PCT),
-                        f64::from(MAX_HUMIDITY_PCT),
+                        model.limit(Dimension::Humidity, Bound::Min),
+                        model.limit(Dimension::Humidity, Bound::Max),
                         1.0,
                         5.0,
                         0.0,
