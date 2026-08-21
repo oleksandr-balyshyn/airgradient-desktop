@@ -52,11 +52,15 @@ impl CardSize {
 }
 
 /// Everything the card needs before it has any data to show.
-#[derive(Debug, Clone)]
+///
+/// The title and icon are `&'static str` because they come from the metric
+/// table and never change; only the unit can be replaced at runtime, by a
+/// device that reports VOC or NOx as a concentration rather than an index.
+#[derive(Debug, Clone, Copy)]
 pub struct SensorCardInit {
-    pub title: String,
-    pub unit: String,
-    pub icon_name: String,
+    pub title: &'static str,
+    pub unit: &'static str,
+    pub icon_name: &'static str,
     pub size: CardSize,
 }
 
@@ -80,9 +84,9 @@ pub enum SensorCardInput {
 }
 
 pub struct SensorCard {
-    title: String,
+    title: &'static str,
     unit: String,
-    icon_name: String,
+    icon_name: &'static str,
     size: CardSize,
     value: Option<f32>,
     status_class: &'static str,
@@ -132,7 +136,7 @@ impl SimpleComponent for SensorCard {
                 add_css_class: "metric-icon",
 
                 gtk::Image {
-                    set_icon_name: Some(model.icon_name.as_str()),
+                    set_icon_name: Some(model.icon_name),
                     set_pixel_size: model.size.icon_pixel_size(),
                     set_halign: gtk::Align::Center,
                     set_valign: gtk::Align::Center,
@@ -151,7 +155,7 @@ impl SimpleComponent for SensorCard {
                     set_hexpand: true,
 
                     gtk::Label {
-                        set_label: model.title.as_str(),
+                        set_label: model.title,
                         set_halign: gtk::Align::Start,
                         add_css_class: "metric-title",
                     },
@@ -203,7 +207,7 @@ impl SimpleComponent for SensorCard {
     ) -> ComponentParts<Self> {
         let model = Self {
             title: init.title,
-            unit: init.unit,
+            unit: init.unit.to_string(),
             icon_name: init.icon_name,
             size: init.size,
             value: None,

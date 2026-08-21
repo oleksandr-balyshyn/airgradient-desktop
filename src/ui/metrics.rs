@@ -294,6 +294,19 @@ mod tests {
     }
 
     #[test]
+    fn units_are_the_ones_both_tabs_show() {
+        // The dashboard cards and their trend lines take their unit from here,
+        // so these strings are user-visible on both tabs, not just internal.
+        assert_eq!(find(CO2_ID).unit, "ppm");
+        assert_eq!(find(PM25_ID).unit, "µg/m³");
+        assert_eq!(find(PM003_COUNT_ID).unit, "count");
+        // The gases default to the sensor index AirGradient's own firmware
+        // reports; a device sending a concentration overrides it per reading.
+        assert_eq!(find(TVOC_ID).unit, "index");
+        assert_eq!(find(NOX_ID).unit, "index");
+    }
+
+    #[test]
     fn the_charted_metric_exists() {
         assert_eq!(find(PM25_ID).title, "PM₂.₅");
     }

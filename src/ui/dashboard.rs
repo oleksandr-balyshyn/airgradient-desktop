@@ -25,9 +25,6 @@ fn gas_unit_label(unit: Option<GasUnit>) -> &'static str {
     unit.unwrap_or(GasUnit::Index).as_str()
 }
 
-/// Unit shared by every particulate mass reading.
-const MICROGRAMS: &str = "µg/m³";
-
 /// Height of the PM2.5 history chart on the main view.
 ///
 /// Taller than the history tab's charts because this one is the only chart on the
@@ -76,11 +73,14 @@ pub struct Dashboard {
 impl Dashboard {
     /// Send one sensor card its reading.
     ///
-    /// `metric_id` names the entry in `ui::metrics` that decides how the value
-    /// is coloured, so the thresholds behind the main view and the History tab
-    /// cannot drift apart. `unit` is the label the card shows next to the number
-    /// (`None` keeps the fixed label the card was built with); `trend_unit` is
-    /// the one written into the "↑ +42 ppm" line.
+    /// `metric_id` names the entry in `ui::metrics`, which supplies both the
+    /// colour thresholds and the unit, so the main view and the History tab
+    /// cannot drift apart on either.
+    ///
+    /// `reported_unit` is for the two gas readings, which arrive as an index on
+    /// one device and a concentration on another: it replaces the metric's own
+    /// unit on the card and in the trend line. `None` means the metric's unit
+    /// is right, which is the case for everything else.
     ///
     /// Every reading handled here is a pollutant, so falling is an improvement.
     fn show_sensor(
@@ -88,14 +88,16 @@ impl Dashboard {
         metric_id: &str,
         value: Option<f32>,
         previous: Option<f32>,
-        unit: Option<&str>,
-        trend_unit: &str,
+        reported_unit: Option<&str>,
     ) {
+        let metric = metrics::find(metric_id);
+        let unit = reported_unit.unwrap_or(metric.unit);
+
         card.emit(SensorCardInput::Show(Reading {
             value,
-            unit: unit.map(str::to_string),
-            status_class: metrics::find(metric_id).status_class(value),
-            trend: Trend::between(value, previous, trend_unit, Preference::LowerIsBetter),
+            unit: reported_unit.map(str::to_string),
+            status_class: metric.status_class(value),
+            trend: Trend::between(value, previous, unit, Preference::LowerIsBetter),
         }));
     }
 
@@ -129,7 +131,6 @@ impl Dashboard {
             snapshot.co2,
             previous.and_then(|previous| previous.co2),
             None,
-            "ppm",
         );
 
         // The gases report either a sensor index or a concentration depending on
@@ -141,7 +142,6 @@ impl Dashboard {
             snapshot.tvoc,
             previous.and_then(|previous| previous.tvoc),
             Some(tvoc_unit),
-            tvoc_unit,
         );
 
         let nox_unit = gas_unit_label(snapshot.nox_unit);
@@ -151,7 +151,6 @@ impl Dashboard {
             snapshot.nox,
             previous.and_then(|previous| previous.nox),
             Some(nox_unit),
-            nox_unit,
         );
 
         Self::show_sensor(
@@ -160,7 +159,6 @@ impl Dashboard {
             snapshot.pm003_count,
             previous.and_then(|previous| previous.pm003_count),
             None,
-            "count",
         );
         Self::show_sensor(
             &self.pm1,
@@ -168,7 +166,6 @@ impl Dashboard {
             snapshot.pm1,
             previous.and_then(|previous| previous.pm1),
             None,
-            MICROGRAMS,
         );
         Self::show_sensor(
             &self.pm25,
@@ -176,7 +173,6 @@ impl Dashboard {
             snapshot.pm25,
             previous.and_then(|previous| previous.pm25),
             None,
-            MICROGRAMS,
         );
         Self::show_sensor(
             &self.pm10,
@@ -184,7 +180,6 @@ impl Dashboard {
             snapshot.pm10,
             previous.and_then(|previous| previous.pm10),
             None,
-            MICROGRAMS,
         );
     }
 }
@@ -317,17 +312,16 @@ impl SimpleComponent for Dashboard {
         root: Self::Root,
         _sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let gas_card = |title: &str, unit: &str, icon: &str| SensorCardInit {
-            title: title.to_string(),
-            unit: unit.to_string(),
-            icon_name: icon.to_string(),
-            size: CardSize::Narrow,
-        };
-        let particle_card = |title: &str, unit: &str| SensorCardInit {
-            title: title.to_string(),
-            unit: unit.to_string(),
-            icon_name: "airgradient-particles-symbolic".to_string(),
-            size: CardSize::Compact,
+        // Title, unit and icon come from the metric table, so the two tabs
+        // cannot end up calling the same reading different things.
+        let card = |id: &str, size: CardSize| {
+            let metric = metrics::find(id);
+            SensorCardInit {
+                title: metric.title,
+                unit: metric.unit,
+                icon_name: metric.icon,
+                size,
+            }
         };
 
         let model = Self {
@@ -339,25 +333,25 @@ impl SimpleComponent for Dashboard {
                 .launch(EnvironmentKind::Humidity)
                 .detach(),
             co2: SensorCard::builder()
-                .launch(gas_card("CO₂", "ppm", "airgradient-co2-symbolic"))
+                .launch(card(CO2_ID, CardSize::Narrow))
                 .detach(),
             tvoc: SensorCard::builder()
-                .launch(gas_card("TVOC", "ppb", "airgradient-voc-symbolic"))
+                .launch(card(TVOC_ID, CardSize::Narrow))
                 .detach(),
             nox: SensorCard::builder()
-                .launch(gas_card("NOx", "ppb", "airgradient-nox-symbolic"))
+                .launch(card(NOX_ID, CardSize::Narrow))
                 .detach(),
             pm003_count: SensorCard::builder()
-                .launch(particle_card("PM₀.₃ Count", "count"))
+                .launch(card(PM003_COUNT_ID, CardSize::Compact))
                 .detach(),
             pm1: SensorCard::builder()
-                .launch(particle_card("PM₁.₀", "µg/m³"))
+                .launch(card(PM1_ID, CardSize::Compact))
                 .detach(),
             pm25: SensorCard::builder()
-                .launch(particle_card("PM₂.₅", "µg/m³"))
+                .launch(card(PM25_ID, CardSize::Compact))
                 .detach(),
             pm10: SensorCard::builder()
-                .launch(particle_card("PM₁₀", "µg/m³"))
+                .launch(card(PM10_ID, CardSize::Compact))
                 .detach(),
             pm25_history: MetricCard::builder()
                 .launch(MetricCardInit {
