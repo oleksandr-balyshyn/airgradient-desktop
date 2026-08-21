@@ -64,7 +64,7 @@ App                              root: window, header bar, navigation, I/O
 Two stacks, for two different jobs:
 
 - A `gtk::Stack` switches between whole pages — onboarding, the measurement view,
-  Settings, Help. Pages are identified by `state::Page`, and the root switches
+  Settings, Help. Pages are identified by `ui::page::Page`, and the root switches
   them with a single `#[watch] set_visible_child_name: model.page.id()`.
 - An `adw::ViewStack` holds the Main and History tabs. It is a `ViewStack` rather
   than a plain `Stack` because that is what an `AdwViewSwitcher` binds to, which

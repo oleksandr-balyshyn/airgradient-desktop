@@ -10,6 +10,7 @@
 //! * `metrics` is the table of what the app measures, shared by both tabs,
 //! * `chart` draws a series of readings with Cairo,
 //! * `sensor_card`, `environment_card` and `aqi_card` render one reading each,
+//! * `page` names the pages the window can switch between,
 //! * `settings`, `welcome` and `help` are the other pages,
 //! * `tray` bridges the StatusNotifier tray thread into the UI,
 //! * `theming` loads the selected theme's colours into GTK, and
@@ -24,6 +25,7 @@ mod help;
 mod history_view;
 mod metric_card;
 mod metrics;
+mod page;
 mod sensor_card;
 mod settings;
 mod status;

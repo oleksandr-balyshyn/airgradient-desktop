@@ -11,7 +11,6 @@ pub mod device;
 pub mod history;
 pub mod notifications;
 pub mod sensors;
-pub mod state;
 pub mod storage;
 pub mod theme;
 pub mod ui;

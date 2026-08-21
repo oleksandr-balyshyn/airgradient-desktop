@@ -243,7 +243,6 @@ src/
   theme.rs                The 57 colour themes and the CSS they generate.
   alerts.rs               Decides which readings deserve a notification.
   notifications.rs        Delivers those notifications to the desktop.
-  state.rs                The page list shared by the UI components.
   sensors/
     air_quality.rs        Parses AirGradient JSON into typed values.
     thresholds.rs         Classifies sensor values into semantic statuses.
@@ -254,6 +253,7 @@ src/
     dashboard.rs          Main tab.
     history_view.rs       History tab.
     metrics.rs            Table of what the app measures.
+    page.rs               The pages the main window can switch between.
     metric_card.rs        A metric with its chart, used by both tabs.
     chart.rs              Cairo line chart plus its coordinate maths.
     sensor_card.rs        Reusable pollutant metric card.

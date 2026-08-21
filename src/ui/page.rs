@@ -1,4 +1,4 @@
-//! Shared UI vocabulary.
+//! The pages the main window can show.
 //!
 //! Persisted settings live in `config.rs`, colours in `theme.rs`, and everything
 //! else about the running app is held by the Relm4 component that owns it. What
@@ -22,16 +22,6 @@ impl Page {
             Self::Dashboard => "dashboard",
             Self::Settings => "settings",
             Self::Help => "help",
-        }
-    }
-
-    /// Human-readable page title.
-    pub const fn title(self) -> &'static str {
-        match self {
-            Self::Welcome => "Welcome",
-            Self::Dashboard => "Dashboard",
-            Self::Settings => "Settings",
-            Self::Help => "Help",
         }
     }
 }

@@ -25,6 +25,7 @@ use relm4::{adw, gtk, prelude::*};
 use super::dashboard::{Dashboard, DashboardInput};
 use super::help::Help;
 use super::history_view::{HistoryView, HistoryViewInput};
+use super::page::Page;
 use super::settings::{Settings, SettingsInit, SettingsInput, SettingsOutput};
 use super::theming;
 use super::tray::{self, TrayHandle};
@@ -37,7 +38,6 @@ use crate::history::{unix_now, History, Sample};
 use crate::notifications::send_air_quality_notification;
 use crate::sensors::aqi::{nowcast, pm25_to_aqi, NOWCAST_HOURS};
 use crate::sensors::AirMeasureSnapshot;
-use crate::state::Page;
 use crate::theme::{self, Theme};
 
 /// Names of the two top-level tabs inside the measurement view.
