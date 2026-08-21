@@ -63,13 +63,13 @@ pub fn parse_air_measurements(raw: &Value) -> AirMeasureSnapshot {
     // AirGradient's current firmware exposes `noxIndex`, but accepting common
     // alternatives keeps the app usable if payload names change or if users test
     // with compatible local-server implementations.
-    let nox = extract_measurement_value(raw, &["nox", "no2", "nox_ppb"])
-        .or_else(|| extract_measurement_value(raw, &["noxIndex", "nox_index"]));
-    let nox_unit = gas_unit(nox, raw, &["noxIndex", "nox_index"]);
+    let (nox, nox_unit) = extract_gas(raw, &["nox", "no2", "nox_ppb"], &["noxIndex", "nox_index"]);
 
-    let tvoc = extract_measurement_value(raw, &["tvoc", "tvoc_ppb", "tvoc_ppm", "voc"])
-        .or_else(|| extract_measurement_value(raw, &["tvocIndex", "tvoc_index"]));
-    let tvoc_unit = gas_unit(tvoc, raw, &["tvocIndex", "tvoc_index"]);
+    let (tvoc, tvoc_unit) = extract_gas(
+        raw,
+        &["tvoc", "tvoc_ppb", "tvoc_ppm", "voc"],
+        &["tvocIndex", "tvoc_index"],
+    );
     // Prefer the device's compensated particulate reading for the same reason
     // temperature and humidity do below: AirGradient applies its batch and EPA
     // corrections to it, and it is what the vendor's own dashboard reports. The
@@ -133,19 +133,25 @@ pub fn parse_air_measurements(raw: &Value) -> AirMeasureSnapshot {
     }
 }
 
-/// Decide which unit a gas reading is in.
+/// Read a gas reading together with the unit it is expressed in.
 ///
-/// If the payload used one of the `*Index` key names the value is an index;
-/// anything else is treated as a concentration in ppb. A missing reading has no
-/// unit at all.
-fn gas_unit(value: Option<f32>, raw: &Value, index_keys: &[&str]) -> Option<GasUnit> {
-    value.map(|_| {
-        if has_any_key(raw, index_keys) {
-            GasUnit::Index
-        } else {
-            GasUnit::Ppb
-        }
-    })
+/// The concentration keys are tried first, then the index keys, and the unit is
+/// taken from whichever list actually supplied the value. Deciding the unit any
+/// other way lets a reading and its unit come from different keys: a payload
+/// carrying both `tvoc_ppb` and `tvocIndex` would otherwise report the ppb
+/// number labelled as an index. A missing reading has no unit at all.
+fn extract_gas(
+    raw: &Value,
+    ppb_keys: &[&str],
+    index_keys: &[&str],
+) -> (Option<f32>, Option<GasUnit>) {
+    if let Some(value) = extract_measurement_value(raw, ppb_keys) {
+        return (Some(value), Some(GasUnit::Ppb));
+    }
+    if let Some(value) = extract_measurement_value(raw, index_keys) {
+        return (Some(value), Some(GasUnit::Index));
+    }
+    (None, None)
 }
 
 /// Return the first numeric value found under any candidate key.
@@ -209,23 +215,6 @@ fn find_nested_key(raw: &Value, key: &str) -> Option<f32> {
             None
         }
         _ => None,
-    }
-}
-
-fn has_any_key(raw: &Value, candidates: &[&str]) -> bool {
-    candidates.iter().any(|key| {
-        let lower = key.to_lowercase();
-        has_nested_key(raw, key) || has_nested_key(raw, lower.as_str())
-    })
-}
-
-fn has_nested_key(raw: &Value, key: &str) -> bool {
-    match raw {
-        Value::Object(object) => {
-            object.contains_key(key) || object.values().any(|value| has_nested_key(value, key))
-        }
-        Value::Array(items) => items.iter().any(|value| has_nested_key(value, key)),
-        _ => false,
     }
 }
 
@@ -304,5 +293,32 @@ mod tests {
         assert_eq!(snapshot.nox, Some(3.0));
         assert_eq!(snapshot.nox_unit, Some(GasUnit::Index));
         assert_eq!(snapshot.pm003_count, Some(1200.0));
+    }
+
+    #[test]
+    fn mixed_gas_keys_take_the_unit_from_the_key_that_supplied_the_value() {
+        // A payload carrying both spellings must not label the ppb reading as an
+        // index: the value is read concentration-first, so the unit has to be too.
+        let snapshot = parse_air_measurements(&json!({
+            "tvoc_ppb": 240,
+            "tvocIndex": 100,
+            "nox_ppb": 18,
+            "noxIndex": 2,
+        }));
+
+        assert_eq!(snapshot.tvoc, Some(240.0));
+        assert_eq!(snapshot.tvoc_unit, Some(GasUnit::Ppb));
+        assert_eq!(snapshot.nox, Some(18.0));
+        assert_eq!(snapshot.nox_unit, Some(GasUnit::Ppb));
+    }
+
+    #[test]
+    fn gas_keys_that_only_carry_an_index_are_labelled_as_an_index() {
+        let snapshot = parse_air_measurements(&json!({ "tvocIndex": 100, "noxIndex": 2 }));
+
+        assert_eq!(snapshot.tvoc, Some(100.0));
+        assert_eq!(snapshot.tvoc_unit, Some(GasUnit::Index));
+        assert_eq!(snapshot.nox, Some(2.0));
+        assert_eq!(snapshot.nox_unit, Some(GasUnit::Index));
     }
 }
