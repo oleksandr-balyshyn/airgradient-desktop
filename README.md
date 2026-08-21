@@ -34,6 +34,8 @@ The window has two tabs, switched from the header bar.
 - CO2, TVOC, and NOx
 - PM0.3 count, PM1.0, PM2.5, and PM10
 - trend indicators comparing each reading with the previous one
+- a comfort verdict on the temperature and humidity cards, highlighted when a
+  reading falls outside the range you set in Settings
 - a chart of recorded PM2.5, the reading most worth watching over time
 - the last successful update time
 
@@ -43,6 +45,29 @@ low/average/high summary of the recorded range.
 Recorded measurements are kept across restarts, so the charts are not empty when
 you reopen the app. Pressure is not exposed by the local-server payload and is
 not shown.
+
+## Comfort Alerts
+
+Air quality and comfort are different problems with different fixes. Air quality
+alerts fire against published health limits, and the answer is usually
+ventilation. Comfort is a preference, so you set it yourself: Settings has a
+Comfort group with the coolest and warmest temperature and the driest and most
+humid humidity you are happy with. The defaults are 18–26 °C and 40–60 %.
+
+Two things follow from those ranges:
+
+- The Temperature and Humidity cards say where the reading sits — Cool,
+  Comfortable, Warm, Dry, Humid — and highlight themselves in amber when it is
+  outside the range.
+- With Air Quality Notifications turned on, a reading outside the range sends a
+  notification that names what would fix it. Temperature and humidity are judged
+  together, because the pair is what decides the answer: a warm humid room asks
+  for the air conditioning, which cools and dehumidifies at once, while a cool
+  humid room wants heating *and* a dehumidifier. Both readings out of range is
+  treated as more urgent than one.
+
+Like every other alert, a comfort alert needs two consecutive readings before it
+fires, so a single stray measurement stays quiet.
 
 ## How It Works
 
@@ -222,6 +247,8 @@ src/
   sensors/
     air_quality.rs        Parses AirGradient JSON into typed values.
     thresholds.rs         Classifies sensor values into semantic statuses.
+    aqi.rs                EPA AQI breakpoints, bands, and NowCast smoothing.
+    comfort.rs            Judges temperature and humidity against user ranges.
   ui/
     app.rs                Root component: window, header, tabs, refresh loop.
     dashboard.rs          Main tab.

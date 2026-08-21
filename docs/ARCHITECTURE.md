@@ -135,6 +135,7 @@ testable without a display. Most of the test suite lives here.
 | `sensors::air_quality` | Parse device JSON into `AirMeasureSnapshot` |
 | `sensors::aqi` | EPA breakpoints and the NowCast smoothing |
 | `sensors::thresholds` | Classify a reading as green/yellow/orange/red |
+| `sensors::comfort` | Judge temperature and humidity against the user's ranges |
 | `device` | Normalize base URLs, perform the HTTP request |
 | `config` | Read and write `config.json` |
 | `history` | The measurement ring buffer and its file |
@@ -217,6 +218,20 @@ quality.
 `alerts.rs` decides *whether* to notify — it requires two consecutive bad
 readings, applies a 20-minute cooldown per alert kind, and re-fires early only
 when a reading escalates to a worse severity. It knows nothing about GTK or D-Bus.
+
+Most alerts are one entry in its `RULES` table: a reading, a classifier, and the
+text for each severity. The comfort alert is the exception, because it is the
+only one that depends on two readings at once. Temperature and humidity are
+judged together against the ranges the user set in Settings, so the notification
+can name what would actually fix the room — air conditioning cools *and*
+dehumidifies, while a cool damp room needs heating and a dehumidifier. Both
+readings out of range is a `Warning` and one is a `Notice`, so a room that turns
+muggy after merely being warm escalates and skips the cooldown.
+
+Because the user's humidity range now covers "too dry" and "too humid", the
+fixed humidity notices that used to fire at 30% and 65% are gone; what remains
+is the mold-risk warning above 75%, which is a fact about condensation rather
+than a preference.
 
 `notifications.rs` decides *how* to deliver, using `gio::Notification` through the
 application's own ID. That is not an arbitrary choice: under strict snap
