@@ -18,6 +18,17 @@ use crate::sensors::{AirMeasureSnapshot, GasUnit};
 const NEUTRAL_CLASS: &str = "status-blue";
 const COARSE_CLASS: &str = "status-orange";
 
+/// How a reading's colour is decided.
+#[derive(Clone, Copy)]
+enum Judgement {
+    /// Judged against published indoor breakpoints, so the colour follows the
+    /// value.
+    Thresholds(fn(f32) -> StatusColor),
+    /// No widely agreed indoor breakpoints for this reading, so it gets one
+    /// fixed colour rather than a misleading verdict.
+    Fixed(&'static str),
+}
+
 /// One measurable quantity.
 pub struct Metric {
     /// Stable identifier, used to look a metric up.
@@ -28,13 +39,8 @@ pub struct Metric {
     pub icon: &'static str,
     /// How to read this metric out of a snapshot.
     read: fn(&AirMeasureSnapshot) -> Option<f32>,
-    /// How to judge the value, where thresholds exist.
-    ///
-    /// `None` means there are no widely agreed indoor breakpoints for this
-    /// reading, so it gets a fixed colour rather than a misleading verdict.
-    classify: Option<fn(f32) -> StatusColor>,
-    /// Colour used when `classify` is `None`.
-    fixed_class: &'static str,
+    /// How this reading's colour is decided.
+    judgement: Judgement,
     /// The unit the device reported for this reading, where it can vary.
     ///
     /// VOC and NOx arrive as a unitless sensor index from AirGradient's own
@@ -56,9 +62,9 @@ impl Metric {
 
     /// CSS class describing how this value should look.
     pub fn status_class(&self, value: Option<f32>) -> &'static str {
-        match self.classify {
-            Some(classify) => status::class_for(value, classify),
-            None => self.fixed_class,
+        match self.judgement {
+            Judgement::Thresholds(classify) => status::class_for(value, classify),
+            Judgement::Fixed(class) => class,
         }
     }
 
@@ -108,8 +114,7 @@ pub const METRICS: &[Metric] = &[
         unit: "AQI",
         icon: "airgradient-air-quality-symbolic",
         read: |snapshot| snapshot.aqi,
-        classify: Some(aqi_status_color),
-        fixed_class: NEUTRAL_CLASS,
+        judgement: Judgement::Thresholds(aqi_status_color),
         read_unit: no_reported_unit,
     },
     Metric {
@@ -118,8 +123,7 @@ pub const METRICS: &[Metric] = &[
         unit: "ppm",
         icon: "airgradient-co2-symbolic",
         read: |snapshot| snapshot.co2,
-        classify: Some(co2_status_color),
-        fixed_class: NEUTRAL_CLASS,
+        judgement: Judgement::Thresholds(co2_status_color),
         read_unit: no_reported_unit,
     },
     Metric {
@@ -128,8 +132,7 @@ pub const METRICS: &[Metric] = &[
         unit: "°C",
         icon: "airgradient-temperature-symbolic",
         read: |snapshot| snapshot.temperature,
-        classify: None,
-        fixed_class: NEUTRAL_CLASS,
+        judgement: Judgement::Fixed(NEUTRAL_CLASS),
         read_unit: no_reported_unit,
     },
     Metric {
@@ -138,8 +141,7 @@ pub const METRICS: &[Metric] = &[
         unit: "%",
         icon: "airgradient-humidity-symbolic",
         read: |snapshot| snapshot.humidity,
-        classify: None,
-        fixed_class: NEUTRAL_CLASS,
+        judgement: Judgement::Fixed(NEUTRAL_CLASS),
         read_unit: no_reported_unit,
     },
     Metric {
@@ -148,8 +150,7 @@ pub const METRICS: &[Metric] = &[
         unit: "index",
         icon: "airgradient-voc-symbolic",
         read: |snapshot| snapshot.tvoc,
-        classify: Some(tvoc_status_color),
-        fixed_class: NEUTRAL_CLASS,
+        judgement: Judgement::Thresholds(tvoc_status_color),
         read_unit: |snapshot| snapshot.tvoc_unit,
     },
     Metric {
@@ -158,8 +159,7 @@ pub const METRICS: &[Metric] = &[
         unit: "index",
         icon: "airgradient-nox-symbolic",
         read: |snapshot| snapshot.nox,
-        classify: Some(nox_status_color),
-        fixed_class: NEUTRAL_CLASS,
+        judgement: Judgement::Thresholds(nox_status_color),
         read_unit: |snapshot| snapshot.nox_unit,
     },
     Metric {
@@ -168,8 +168,7 @@ pub const METRICS: &[Metric] = &[
         unit: "count",
         icon: "airgradient-particles-symbolic",
         read: |snapshot| snapshot.pm003_count,
-        classify: None,
-        fixed_class: NEUTRAL_CLASS,
+        judgement: Judgement::Fixed(NEUTRAL_CLASS),
         read_unit: no_reported_unit,
     },
     Metric {
@@ -178,8 +177,7 @@ pub const METRICS: &[Metric] = &[
         unit: "µg/m³",
         icon: "airgradient-particles-symbolic",
         read: |snapshot| snapshot.pm1,
-        classify: None,
-        fixed_class: NEUTRAL_CLASS,
+        judgement: Judgement::Fixed(NEUTRAL_CLASS),
         read_unit: no_reported_unit,
     },
     Metric {
@@ -188,8 +186,7 @@ pub const METRICS: &[Metric] = &[
         unit: "µg/m³",
         icon: "airgradient-particles-symbolic",
         read: |snapshot| snapshot.pm25,
-        classify: Some(pm25_status_color),
-        fixed_class: NEUTRAL_CLASS,
+        judgement: Judgement::Thresholds(pm25_status_color),
         read_unit: no_reported_unit,
     },
     Metric {
@@ -198,8 +195,7 @@ pub const METRICS: &[Metric] = &[
         unit: "µg/m³",
         icon: "airgradient-particles-symbolic",
         read: |snapshot| snapshot.pm10,
-        classify: None,
-        fixed_class: COARSE_CLASS,
+        judgement: Judgement::Fixed(COARSE_CLASS),
         read_unit: no_reported_unit,
     },
 ];
