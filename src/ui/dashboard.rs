@@ -61,13 +61,14 @@ pub struct Dashboard {
     pm10: Controller<SensorCard>,
     /// PM2.5 over time, the one chart on the main view.
     pm25_history: Controller<MetricCard>,
-    /// The previous snapshot, kept only to compute trend arrows.
-    previous: Option<AirMeasureSnapshot>,
+    /// The most recent reading.
+    ///
+    /// Kept for two things: the next reading's trend arrows compare against it,
+    /// and editing the comfort ranges re-judges it so the temperature and
+    /// humidity cards do not keep a highlight that describes the old ranges.
+    latest: Option<AirMeasureSnapshot>,
     /// Ranges the temperature and humidity cards are judged against.
     comfort: ComfortThresholds,
-    /// The latest reading, kept so the two environment cards can be repainted
-    /// when the comfort ranges change without waiting for the next fetch.
-    latest: Option<AirMeasureSnapshot>,
     server_text: String,
     status_text: String,
 }
@@ -99,8 +100,11 @@ impl Dashboard {
     }
 
     /// Send each card the part of the snapshot it is responsible for.
+    ///
+    /// Called before `latest` is replaced, so what it still holds is the reading
+    /// before this one — which is exactly what the trend arrows compare against.
     fn distribute(&mut self, snapshot: &AirMeasureSnapshot) {
-        let previous = self.previous.as_ref();
+        let previous = self.latest.as_ref();
 
         self.aqi.emit(AqiCardInput::Show {
             value: snapshot.aqi,
@@ -361,9 +365,8 @@ impl SimpleComponent for Dashboard {
                     chart_height: PM25_CHART_HEIGHT,
                 })
                 .detach(),
-            previous: None,
-            comfort: ComfortThresholds::default(),
             latest: None,
+            comfort: ComfortThresholds::default(),
             server_text: "Server URL: Not configured".to_string(),
             status_text: "Press refresh to load current measurements.".to_string(),
         };
@@ -388,8 +391,7 @@ impl SimpleComponent for Dashboard {
         match message {
             DashboardInput::Show(snapshot) => {
                 self.distribute(&snapshot);
-                self.latest = Some(snapshot.as_ref().clone());
-                self.previous = Some(*snapshot);
+                self.latest = Some(*snapshot);
                 self.status_text = "Latest measurements loaded.".to_string();
             }
             DashboardInput::SetServerUrl(url) => {
