@@ -203,11 +203,9 @@ impl fmt::Display for ComfortRangeError {
 impl std::error::Error for ComfortRangeError {}
 
 /// Both comfort ranges, as chosen by the user.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct ComfortThresholds {
-    #[serde(default = "default_temperature_range")]
     pub temperature: ComfortRange,
-    #[serde(default = "default_humidity_range")]
     pub humidity: ComfortRange,
 }
 
@@ -250,26 +248,59 @@ fn default_humidity_range() -> ComfortRange {
     }
 }
 
-impl<'de> Deserialize<'de> for ComfortRange {
+impl<'de> Deserialize<'de> for ComfortThresholds {
+    /// Load both ranges, checking each against the limits of its own dimension.
+    ///
+    /// This is written by hand rather than derived because a stored range is
+    /// just two numbers: nothing in `{"min":10,"max":140}` says whether it is a
+    /// temperature or a humidity, and only the field it arrived in knows. Going
+    /// through `ComfortRange::new` here means a config file gets exactly the
+    /// checks the settings form gets — a humidity above 100% is refused rather
+    /// than quietly loaded, and `config` reports it like any other unreadable
+    /// setting, falling back to defaults with a message on the Settings page.
+    ///
+    /// Either field may be missing, which is what a config file written before
+    /// comfort ranges existed looks like.
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        /// The stored shape, without the ordering rule attached.
         #[derive(Deserialize)]
-        struct Stored {
+        struct StoredRange {
             min: f32,
             max: f32,
         }
 
-        let Stored { min, max } = Stored::deserialize(deserializer)?;
-        if !min.is_finite() || !max.is_finite() || min >= max {
-            return Err(serde::de::Error::custom(ComfortRangeError::Inverted {
-                min,
-                max,
-            }));
+        #[derive(Deserialize)]
+        struct Stored {
+            #[serde(default)]
+            temperature: Option<StoredRange>,
+            #[serde(default)]
+            humidity: Option<StoredRange>,
         }
-        Ok(Self { min, max })
+
+        fn range<E: serde::de::Error>(
+            dimension: Dimension,
+            stored: Option<StoredRange>,
+            fallback: fn() -> ComfortRange,
+        ) -> Result<ComfortRange, E> {
+            match stored {
+                Some(StoredRange { min, max }) => {
+                    ComfortRange::new(dimension, min, max).map_err(E::custom)
+                }
+                None => Ok(fallback()),
+            }
+        }
+
+        let stored = Stored::deserialize(deserializer)?;
+        Ok(Self {
+            temperature: range(
+                Dimension::Temperature,
+                stored.temperature,
+                default_temperature_range,
+            )?,
+            humidity: range(Dimension::Humidity, stored.humidity, default_humidity_range)?,
+        })
     }
 }
 
@@ -300,52 +331,78 @@ impl Comfort {
             && self.humidity.is_some_and(Position::is_uncomfortable)
     }
 
-    /// Short description of the room, for example "Warm and humid".
-    pub fn headline(self) -> &'static str {
+    /// What to say about the room, and what would fix it.
+    ///
+    /// Both come out of one match so they cannot drift apart. Written as two
+    /// separate matches over the same nine cases, adding a case to one and
+    /// forgetting the other would produce a notification whose advice does not
+    /// match its title.
+    ///
+    /// The pairs are the interesting part. Air conditioning cools *and* dries,
+    /// so it is the single answer to a warm humid room; a warm dry room wants
+    /// cooling without losing more moisture; a cool humid room is where a
+    /// dehumidifier earns its place, because heating alone would leave the damp.
+    const fn recommendation(self) -> Recommendation {
         use Position::{Above, Below};
 
         match (self.temperature, self.humidity) {
-            (Some(Above), Some(Above)) => "The room is warm and humid",
-            (Some(Above), Some(Below)) => "The room is warm and dry",
-            (Some(Below), Some(Above)) => "The room is cool and humid",
-            (Some(Below), Some(Below)) => "The room is cool and dry",
-            (Some(Above), _) => "The room is warm",
-            (Some(Below), _) => "The room is cool",
-            (_, Some(Above)) => "The room is humid",
-            (_, Some(Below)) => "The room is dry",
-            _ => "The room is comfortable",
+            (Some(Above), Some(Above)) => Recommendation {
+                headline: "The room is warm and humid",
+                advice: "Turn on the air conditioning — it cools and dehumidifies in one go.",
+            },
+            (Some(Above), Some(Below)) => Recommendation {
+                headline: "The room is warm and dry",
+                advice: "Cool the room, and run a humidifier so cooling does not dry it further.",
+            },
+            (Some(Below), Some(Above)) => Recommendation {
+                headline: "The room is cool and humid",
+                advice: "Warm the room and run a dehumidifier; heating alone will leave it damp.",
+            },
+            (Some(Below), Some(Below)) => Recommendation {
+                headline: "The room is cool and dry",
+                advice: "Warm the room and run a humidifier — heating dries the air further.",
+            },
+            (Some(Above), _) => Recommendation {
+                headline: "The room is warm",
+                advice: "Cool the room with air conditioning or a fan.",
+            },
+            (Some(Below), _) => Recommendation {
+                headline: "The room is cool",
+                advice: "Warm the room.",
+            },
+            (_, Some(Above)) => Recommendation {
+                headline: "The room is humid",
+                advice: "Run a dehumidifier or ventilate to bring the moisture down.",
+            },
+            (_, Some(Below)) => Recommendation {
+                headline: "The room is dry",
+                advice: "Run a humidifier to bring the moisture up.",
+            },
+            _ => Recommendation {
+                headline: "The room is comfortable",
+                advice: "Nothing to do — temperature and humidity are both in range.",
+            },
         }
+    }
+
+    /// Short description of the room, for example "The room is warm and humid".
+    pub const fn headline(self) -> &'static str {
+        self.recommendation().headline
     }
 
     /// What to do about it, in terms of appliances someone actually owns.
-    ///
-    /// The pairs matter here. Air conditioning cools *and* dries, so it is the
-    /// single answer to a warm, humid room; a warm dry room wants cooling
-    /// without losing more moisture; a cool humid room is the one where a
-    /// dehumidifier earns its place, because heating alone would leave the damp.
-    pub fn advice(self) -> &'static str {
-        use Position::{Above, Below};
-
-        match (self.temperature, self.humidity) {
-            (Some(Above), Some(Above)) => {
-                "Turn on the air conditioning — it cools and dehumidifies in one go."
-            }
-            (Some(Above), Some(Below)) => {
-                "Cool the room, and run a humidifier so cooling does not dry it further."
-            }
-            (Some(Below), Some(Above)) => {
-                "Warm the room and run a dehumidifier; heating alone will leave it damp."
-            }
-            (Some(Below), Some(Below)) => {
-                "Warm the room and run a humidifier — heating dries the air further."
-            }
-            (Some(Above), _) => "Cool the room with air conditioning or a fan.",
-            (Some(Below), _) => "Warm the room.",
-            (_, Some(Above)) => "Run a dehumidifier or ventilate to bring the moisture down.",
-            (_, Some(Below)) => "Run a humidifier to bring the moisture up.",
-            _ => "Nothing to do — temperature and humidity are both in range.",
-        }
+    pub const fn advice(self) -> &'static str {
+        self.recommendation().advice
     }
+}
+
+/// A description of the room paired with the action that would fix it.
+///
+/// Private: outside this module the two are read one at a time, as a
+/// notification's title and body.
+struct Recommendation {
+    headline: &'static str,
+    advice: &'static str,
 }
 
 #[cfg(test)]
@@ -491,20 +548,57 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_range_round_trips_through_json() {
-        let range = ComfortRange::new(Dimension::Temperature, 19.5, 24.0).expect("valid range");
-        let raw = serde_json::to_string(&range).expect("range should serialize");
+    fn stored_ranges_round_trip_through_json() {
+        let stored = ComfortThresholds {
+            temperature: ComfortRange::new(Dimension::Temperature, 19.5, 24.0)
+                .expect("valid range"),
+            humidity: ComfortRange::new(Dimension::Humidity, 35.0, 55.0).expect("valid range"),
+        };
+        let raw = serde_json::to_string(&stored).expect("thresholds should serialize");
 
-        let restored: ComfortRange = serde_json::from_str(&raw).expect("range should load");
+        let restored: ComfortThresholds =
+            serde_json::from_str(&raw).expect("thresholds should load");
 
-        assert_eq!(restored, range);
+        assert_eq!(restored, stored);
     }
 
     #[test]
     fn an_inverted_range_in_a_config_file_is_refused() {
-        let err = serde_json::from_str::<ComfortRange>(r#"{"min":30.0,"max":10.0}"#)
-            .expect_err("an inverted stored range must not load");
+        let err = serde_json::from_str::<ComfortThresholds>(
+            r#"{"temperature":{"min":30.0,"max":10.0},"humidity":{"min":40.0,"max":60.0}}"#,
+        )
+        .expect_err("an inverted stored range must not load");
 
         assert!(err.to_string().contains("must be below"));
+    }
+
+    #[test]
+    fn a_stored_humidity_outside_the_percentage_scale_is_refused() {
+        // The settings form cannot produce this, but a hand-edited config file
+        // can, and it would call every real reading uncomfortably dry.
+        let err = serde_json::from_str::<ComfortThresholds>(
+            r#"{"temperature":{"min":18.0,"max":26.0},"humidity":{"min":40.0,"max":500.0}}"#,
+        )
+        .expect_err("humidity above 100% must not load");
+
+        assert!(err.to_string().contains("outside the allowed"));
+    }
+
+    #[test]
+    fn a_config_file_from_before_comfort_ranges_loads_with_the_defaults() {
+        let loaded: ComfortThresholds =
+            serde_json::from_str("{}").expect("an empty object should load");
+
+        assert_eq!(loaded, ComfortThresholds::default());
+    }
+
+    #[test]
+    fn one_stored_range_is_enough_and_the_other_defaults() {
+        let loaded: ComfortThresholds =
+            serde_json::from_str(r#"{"humidity":{"min":30.0,"max":70.0}}"#)
+                .expect("a partial object should load");
+
+        assert_eq!(loaded.humidity.min(), 30.0);
+        assert_eq!(loaded.temperature, ComfortThresholds::default().temperature);
     }
 }
