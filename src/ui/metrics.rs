@@ -62,8 +62,21 @@ impl Metric {
     }
 }
 
+/// Stable identifiers, one per entry in `METRICS`.
+///
+/// Call sites name a metric through these rather than through a bare string, so
+/// a typo is a compile error instead of a panic inside `find`.
+pub const AQI_ID: &str = "aqi";
+pub const CO2_ID: &str = "co2";
+pub const TEMPERATURE_ID: &str = "temperature";
+pub const HUMIDITY_ID: &str = "humidity";
+pub const TVOC_ID: &str = "tvoc";
+pub const NOX_ID: &str = "nox";
+pub const PM003_COUNT_ID: &str = "pm003_count";
+pub const PM1_ID: &str = "pm1";
 /// Identifier of the metric charted on the main view.
 pub const PM25_ID: &str = "pm25";
+pub const PM10_ID: &str = "pm10";
 
 /// Every metric, in the order the history view shows them.
 ///
@@ -71,7 +84,7 @@ pub const PM25_ID: &str = "pm25";
 /// gases, then particulates from finest to coarsest.
 pub const METRICS: &[Metric] = &[
     Metric {
-        id: "aqi",
+        id: AQI_ID,
         title: "Air Quality Index",
         unit: "AQI",
         icon: "airgradient-air-quality-symbolic",
@@ -80,7 +93,7 @@ pub const METRICS: &[Metric] = &[
         fixed_class: NEUTRAL_CLASS,
     },
     Metric {
-        id: "co2",
+        id: CO2_ID,
         title: "CO₂",
         unit: "ppm",
         icon: "airgradient-co2-symbolic",
@@ -89,7 +102,7 @@ pub const METRICS: &[Metric] = &[
         fixed_class: NEUTRAL_CLASS,
     },
     Metric {
-        id: "temperature",
+        id: TEMPERATURE_ID,
         title: "Temperature",
         unit: "°C",
         icon: "airgradient-temperature-symbolic",
@@ -98,7 +111,7 @@ pub const METRICS: &[Metric] = &[
         fixed_class: NEUTRAL_CLASS,
     },
     Metric {
-        id: "humidity",
+        id: HUMIDITY_ID,
         title: "Humidity",
         unit: "%",
         icon: "airgradient-humidity-symbolic",
@@ -107,7 +120,7 @@ pub const METRICS: &[Metric] = &[
         fixed_class: NEUTRAL_CLASS,
     },
     Metric {
-        id: "tvoc",
+        id: TVOC_ID,
         title: "TVOC",
         unit: "index",
         icon: "airgradient-voc-symbolic",
@@ -116,7 +129,7 @@ pub const METRICS: &[Metric] = &[
         fixed_class: NEUTRAL_CLASS,
     },
     Metric {
-        id: "nox",
+        id: NOX_ID,
         title: "NOx",
         unit: "index",
         icon: "airgradient-nox-symbolic",
@@ -125,7 +138,7 @@ pub const METRICS: &[Metric] = &[
         fixed_class: NEUTRAL_CLASS,
     },
     Metric {
-        id: "pm003_count",
+        id: PM003_COUNT_ID,
         title: "PM₀.₃ Count",
         unit: "count",
         icon: "airgradient-particles-symbolic",
@@ -134,7 +147,7 @@ pub const METRICS: &[Metric] = &[
         fixed_class: NEUTRAL_CLASS,
     },
     Metric {
-        id: "pm1",
+        id: PM1_ID,
         title: "PM₁.₀",
         unit: "µg/m³",
         icon: "airgradient-particles-symbolic",
@@ -152,7 +165,7 @@ pub const METRICS: &[Metric] = &[
         fixed_class: NEUTRAL_CLASS,
     },
     Metric {
-        id: "pm10",
+        id: PM10_ID,
         title: "PM₁₀",
         unit: "µg/m³",
         icon: "airgradient-particles-symbolic",
@@ -177,7 +190,10 @@ pub fn find(id: &str) -> &'static Metric {
 
 #[cfg(test)]
 mod tests {
-    use super::{find, METRICS, PM25_ID};
+    use super::{
+        find, AQI_ID, CO2_ID, HUMIDITY_ID, METRICS, NOX_ID, PM003_COUNT_ID, PM10_ID, PM1_ID,
+        PM25_ID, TEMPERATURE_ID, TVOC_ID,
+    };
     use crate::sensors::AirMeasureSnapshot;
     use crate::ui::status::UNKNOWN_CLASS;
 
@@ -229,16 +245,16 @@ mod tests {
 
     #[test]
     fn classified_metrics_report_a_status_and_unclassified_ones_a_fixed_colour() {
-        assert_eq!(find("co2").status_class(Some(500.0)), "status-green");
-        assert_eq!(find("co2").status_class(Some(2500.0)), "status-red");
+        assert_eq!(find(CO2_ID).status_class(Some(500.0)), "status-green");
+        assert_eq!(find(CO2_ID).status_class(Some(2500.0)), "status-red");
         // No thresholds means the colour never changes with the value.
-        assert_eq!(find("temperature").status_class(Some(5.0)), "status-blue");
-        assert_eq!(find("temperature").status_class(Some(45.0)), "status-blue");
+        assert_eq!(find(TEMPERATURE_ID).status_class(Some(5.0)), "status-blue");
+        assert_eq!(find(TEMPERATURE_ID).status_class(Some(45.0)), "status-blue");
     }
 
     #[test]
     fn a_missing_reading_is_unknown_where_thresholds_exist() {
-        assert_eq!(find("co2").status_class(None), UNKNOWN_CLASS);
+        assert_eq!(find(CO2_ID).status_class(None), UNKNOWN_CLASS);
     }
 
     #[test]
@@ -246,6 +262,35 @@ mod tests {
         let snapshots = vec![snapshot(), AirMeasureSnapshot::default(), snapshot()];
 
         assert_eq!(find(PM25_ID).series(&snapshots), vec![33.6, 33.6]);
+    }
+
+    #[test]
+    fn every_id_constant_names_a_metric() {
+        // `find` panics on an unknown id, so this is what keeps a renamed entry
+        // from turning into a crash at runtime.
+        for id in [
+            AQI_ID,
+            CO2_ID,
+            TEMPERATURE_ID,
+            HUMIDITY_ID,
+            TVOC_ID,
+            NOX_ID,
+            PM003_COUNT_ID,
+            PM1_ID,
+            PM25_ID,
+            PM10_ID,
+        ] {
+            assert_eq!(find(id).id, id);
+        }
+    }
+
+    #[test]
+    fn particulates_without_breakpoints_keep_their_fixed_colours() {
+        // The main view reads these classes from here, so a change would repaint
+        // the dashboard cards as well as the History tab.
+        assert_eq!(find(PM003_COUNT_ID).status_class(Some(1.0)), "status-blue");
+        assert_eq!(find(PM1_ID).status_class(Some(1.0)), "status-blue");
+        assert_eq!(find(PM10_ID).status_class(Some(1.0)), "status-orange");
     }
 
     #[test]

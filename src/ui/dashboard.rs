@@ -13,13 +13,9 @@ use relm4::{gtk, prelude::*};
 use super::aqi_card::{AqiCard, AqiCardInput};
 use super::environment_card::{EnvironmentCard, EnvironmentCardInput, EnvironmentKind};
 use super::metric_card::{MetricCard, MetricCardInit, MetricCardInput};
-use super::metrics::{self, PM25_ID};
+use super::metrics::{self, CO2_ID, NOX_ID, PM003_COUNT_ID, PM10_ID, PM1_ID, PM25_ID, TVOC_ID};
 use super::sensor_card::{CardSize, Reading, SensorCard, SensorCardInit, SensorCardInput};
-use super::status::class_for;
 use super::trend::{Preference, Trend};
-use crate::sensors::thresholds::{
-    co2_status_color, nox_status_color, pm25_status_color, tvoc_status_color,
-};
 use crate::sensors::{AirMeasureSnapshot, GasUnit};
 
 /// Unit label for a gas reading, defaulting to the sensor index used by
@@ -28,18 +24,14 @@ fn gas_unit_label(unit: Option<GasUnit>) -> &'static str {
     unit.unwrap_or(GasUnit::Index).as_str()
 }
 
+/// Unit shared by every particulate mass reading.
+const MICROGRAMS: &str = "µg/m³";
+
 /// Height of the PM2.5 history chart on the main view.
 ///
 /// Taller than the history tab's charts because this one is the only chart on the
 /// page and has the room.
 const PM25_CHART_HEIGHT: i32 = 132;
-
-/// Fixed accent for readings that have no health thresholds to classify against.
-///
-/// Particle counts and PM1/PM10 have no widely agreed indoor breakpoints, so
-/// they get a stable color instead of a misleading green/red verdict.
-const PM_COUNT_CLASS: &str = "status-blue";
-const PM10_CLASS: &str = "status-orange";
 
 #[derive(Debug)]
 pub enum DashboardInput {
@@ -73,6 +65,31 @@ pub struct Dashboard {
 }
 
 impl Dashboard {
+    /// Send one sensor card its reading.
+    ///
+    /// `metric_id` names the entry in `ui::metrics` that decides how the value
+    /// is coloured, so the thresholds behind the main view and the History tab
+    /// cannot drift apart. `unit` is the label the card shows next to the number
+    /// (`None` keeps the fixed label the card was built with); `trend_unit` is
+    /// the one written into the "↑ +42 ppm" line.
+    ///
+    /// Every reading handled here is a pollutant, so falling is an improvement.
+    fn show_sensor(
+        card: &Controller<SensorCard>,
+        metric_id: &str,
+        value: Option<f32>,
+        previous: Option<f32>,
+        unit: Option<&str>,
+        trend_unit: &str,
+    ) {
+        card.emit(SensorCardInput::Show(Reading {
+            value,
+            unit: unit.map(str::to_string),
+            status_class: metrics::find(metric_id).status_class(value),
+            trend: Trend::between(value, previous, trend_unit, Preference::LowerIsBetter),
+        }));
+    }
+
     /// Send each card the part of the snapshot it is responsible for.
     fn distribute(&mut self, snapshot: &AirMeasureSnapshot) {
         let previous = self.previous.as_ref();
@@ -90,88 +107,69 @@ impl Dashboard {
             previous: previous.and_then(|previous| previous.humidity),
         });
 
-        self.co2.emit(SensorCardInput::Show(Reading {
-            value: snapshot.co2,
-            unit: None,
-            status_class: class_for(snapshot.co2, co2_status_color),
-            trend: Trend::between(
-                snapshot.co2,
-                previous.and_then(|previous| previous.co2),
-                "ppm",
-                Preference::LowerIsBetter,
-            ),
-        }));
+        Self::show_sensor(
+            &self.co2,
+            CO2_ID,
+            snapshot.co2,
+            previous.and_then(|previous| previous.co2),
+            None,
+            "ppm",
+        );
 
+        // The gases report either a sensor index or a concentration depending on
+        // the device, so their unit comes from the payload rather than the card.
         let tvoc_unit = gas_unit_label(snapshot.tvoc_unit);
-        self.tvoc.emit(SensorCardInput::Show(Reading {
-            value: snapshot.tvoc,
-            unit: Some(tvoc_unit.to_string()),
-            status_class: class_for(snapshot.tvoc, tvoc_status_color),
-            trend: Trend::between(
-                snapshot.tvoc,
-                previous.and_then(|previous| previous.tvoc),
-                tvoc_unit,
-                Preference::LowerIsBetter,
-            ),
-        }));
+        Self::show_sensor(
+            &self.tvoc,
+            TVOC_ID,
+            snapshot.tvoc,
+            previous.and_then(|previous| previous.tvoc),
+            Some(tvoc_unit),
+            tvoc_unit,
+        );
 
         let nox_unit = gas_unit_label(snapshot.nox_unit);
-        self.nox.emit(SensorCardInput::Show(Reading {
-            value: snapshot.nox,
-            unit: Some(nox_unit.to_string()),
-            status_class: class_for(snapshot.nox, nox_status_color),
-            trend: Trend::between(
-                snapshot.nox,
-                previous.and_then(|previous| previous.nox),
-                nox_unit,
-                Preference::LowerIsBetter,
-            ),
-        }));
+        Self::show_sensor(
+            &self.nox,
+            NOX_ID,
+            snapshot.nox,
+            previous.and_then(|previous| previous.nox),
+            Some(nox_unit),
+            nox_unit,
+        );
 
-        self.pm003_count.emit(SensorCardInput::Show(Reading {
-            value: snapshot.pm003_count,
-            unit: None,
-            status_class: PM_COUNT_CLASS,
-            trend: Trend::between(
-                snapshot.pm003_count,
-                previous.and_then(|previous| previous.pm003_count),
-                "count",
-                Preference::LowerIsBetter,
-            ),
-        }));
-        self.pm1.emit(SensorCardInput::Show(Reading {
-            value: snapshot.pm1,
-            unit: None,
-            status_class: PM_COUNT_CLASS,
-            trend: Trend::between(
-                snapshot.pm1,
-                previous.and_then(|previous| previous.pm1),
-                "µg/m³",
-                Preference::LowerIsBetter,
-            ),
-        }));
-        self.pm25.emit(SensorCardInput::Show(Reading {
-            value: snapshot.pm25,
-            unit: None,
-            status_class: class_for(snapshot.pm25, pm25_status_color),
-            trend: Trend::between(
-                snapshot.pm25,
-                previous.and_then(|previous| previous.pm25),
-                "µg/m³",
-                Preference::LowerIsBetter,
-            ),
-        }));
-        self.pm10.emit(SensorCardInput::Show(Reading {
-            value: snapshot.pm10,
-            unit: None,
-            status_class: PM10_CLASS,
-            trend: Trend::between(
-                snapshot.pm10,
-                previous.and_then(|previous| previous.pm10),
-                "µg/m³",
-                Preference::LowerIsBetter,
-            ),
-        }));
+        Self::show_sensor(
+            &self.pm003_count,
+            PM003_COUNT_ID,
+            snapshot.pm003_count,
+            previous.and_then(|previous| previous.pm003_count),
+            None,
+            "count",
+        );
+        Self::show_sensor(
+            &self.pm1,
+            PM1_ID,
+            snapshot.pm1,
+            previous.and_then(|previous| previous.pm1),
+            None,
+            MICROGRAMS,
+        );
+        Self::show_sensor(
+            &self.pm25,
+            PM25_ID,
+            snapshot.pm25,
+            previous.and_then(|previous| previous.pm25),
+            None,
+            MICROGRAMS,
+        );
+        Self::show_sensor(
+            &self.pm10,
+            PM10_ID,
+            snapshot.pm10,
+            previous.and_then(|previous| previous.pm10),
+            None,
+            MICROGRAMS,
+        );
     }
 }
 
