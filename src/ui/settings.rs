@@ -118,12 +118,6 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Turn the current form contents into a config, or explain what is wrong.
-    ///
-    /// The user types a loose string such as `192.168.1.201`, while the config
-    /// file stores a normalized base URL such as `http://192.168.1.201`. Doing
-    /// that conversion here means the fetch code never has to guess, and an
-    /// unusable value is never written to disk.
     /// How far a comfort spin row may be moved.
     ///
     /// Taken from the dimension rather than written into the widget, so the
@@ -146,6 +140,12 @@ impl Settings {
         *form.bound_mut(bound) = value;
     }
 
+    /// Turn the current form contents into a config, or explain what is wrong.
+    ///
+    /// The user types a loose string such as `192.168.1.201`, while the config
+    /// file stores a normalized base URL such as `http://192.168.1.201`. Doing
+    /// that conversion here means the fetch code never has to guess, and an
+    /// unusable value is never written to disk.
     fn validate(&self) -> Result<AppConfig, String> {
         let server_url =
             DeviceBaseUrl::parse(&self.url_text).map_err(|err| format!("Invalid URL: {err}"))?;
