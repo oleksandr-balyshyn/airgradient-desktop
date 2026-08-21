@@ -123,6 +123,17 @@ pub struct AppConfig {
     pub theme: String,
 }
 
+impl AppConfig {
+    /// The configured device URL as display text, or `None` when no device is
+    /// configured yet.
+    ///
+    /// The UI shows this string in the settings field and on the dashboard, and
+    /// asking the config for it keeps that one conversion in one place.
+    pub fn server_url_text(&self) -> Option<String> {
+        self.server_url.as_ref().map(|url| url.as_str().to_string())
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {

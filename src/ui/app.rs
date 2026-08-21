@@ -321,10 +321,7 @@ impl Component for App {
         let history_view = HistoryView::builder().launch(()).detach();
         let settings = Settings::builder()
             .launch(SettingsInit {
-                server_url: config
-                    .server_url
-                    .as_ref()
-                    .map(|url| url.as_str().to_string()),
+                server_url: config.server_url_text(),
                 refresh_interval: config.refresh_interval,
                 notifications_enabled: config.notifications_enabled,
                 start_minimized: config.start_minimized,
@@ -402,16 +399,7 @@ impl Component for App {
         }
         model.publish_history();
 
-        model
-            .dashboard
-            .emit(DashboardInput::SetComfort(config.comfort));
-
-        model.dashboard.emit(DashboardInput::SetServerUrl(
-            config
-                .server_url
-                .as_ref()
-                .map(|url| url.as_str().to_string()),
-        ));
+        model.apply_config(&config);
 
         install_app_actions(&sender);
 
@@ -591,6 +579,29 @@ impl App {
     }
 
     /// Persist a validated configuration and apply it to the running app.
+    /// Make the running app match a configuration.
+    ///
+    /// These are the effects a config has on a live app, and they are the same
+    /// whether the config was just loaded from disk at startup or just saved
+    /// from the Settings page. Writing them once means the two paths cannot
+    /// drift apart — before this existed, adding a setting meant remembering to
+    /// wire it up in both places.
+    ///
+    /// Deliberately *not* here: the theme, which must be applied before any
+    /// widget exists and afterwards travels via `AppInput::ThemeChanged`; the
+    /// current page; and anything that starts a fetch. Those differ between the
+    /// two paths, which is why they stay at their call sites.
+    fn apply_config(&mut self, config: &AppConfig) {
+        self.server_url = config.server_url.clone();
+        self.refresh_interval_secs = config.refresh_interval.as_secs();
+        self.alerts.set_enabled(config.notifications_enabled);
+        self.alerts.set_comfort(config.comfort);
+        self.dashboard
+            .emit(DashboardInput::SetComfort(config.comfort));
+        self.dashboard
+            .emit(DashboardInput::SetServerUrl(config.server_url_text()));
+    }
+
     fn save_config(&mut self, config: AppConfig, sender: &ComponentSender<Self>) {
         if let Err(err) = config::write_config(&config) {
             self.settings
@@ -598,22 +609,10 @@ impl App {
             return;
         }
 
-        self.server_url = config.server_url.clone();
-        self.refresh_interval_secs = config.refresh_interval.as_secs();
-        self.alerts.set_enabled(config.notifications_enabled);
-        self.alerts.set_comfort(config.comfort);
-        self.dashboard
-            .emit(DashboardInput::SetComfort(config.comfort));
+        self.apply_config(&config);
         self.last_updated = None;
 
-        let url_text = config
-            .server_url
-            .as_ref()
-            .map(|url| url.as_str().to_string());
-        self.dashboard
-            .emit(DashboardInput::SetServerUrl(url_text.clone()));
-
-        match url_text {
+        match config.server_url_text() {
             Some(_) => {
                 self.page = Page::Dashboard;
                 self.settings.emit(SettingsInput::SetStatus(
