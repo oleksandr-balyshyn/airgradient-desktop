@@ -12,7 +12,7 @@ use relm4::gtk::prelude::*;
 use relm4::{adw, gtk, prelude::*};
 
 use super::metric_card::{MetricCard, MetricCardInit, MetricCardInput};
-use super::metrics::METRICS;
+use super::metrics::{METRICS, NOX_ID, TVOC_ID};
 use crate::sensors::{AirMeasureSnapshot, GasUnit};
 
 /// Height of each card's chart.
@@ -155,8 +155,8 @@ impl SimpleComponent for HistoryView {
 /// metric has a fixed unit.
 fn reported_unit(metric_id: &str, snapshot: &AirMeasureSnapshot) -> Option<String> {
     let unit = match metric_id {
-        "tvoc" => snapshot.tvoc_unit,
-        "nox" => snapshot.nox_unit,
+        TVOC_ID => snapshot.tvoc_unit,
+        NOX_ID => snapshot.nox_unit,
         _ => None,
     };
     unit.map(GasUnit::as_str).map(str::to_string)
