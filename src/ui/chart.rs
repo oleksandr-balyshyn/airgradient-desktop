@@ -177,18 +177,21 @@ fn draw_series(
     }
 }
 
+/// True minimum and maximum, without the padding `bounds` adds for drawing.
+fn raw_range(values: &[f32]) -> Option<(f32, f32)> {
+    let first = *values.first()?;
+    Some(values.iter().fold((first, first), |(low, high), value| {
+        (low.min(*value), high.max(*value))
+    }))
+}
+
 /// Lowest and highest value to plot.
 ///
 /// A completely flat series has no range, which would mean dividing by zero when
 /// scaling. Padding it out puts the line through the middle of the plot instead,
 /// which is also the honest picture: nothing changed.
 pub fn bounds(values: &[f32]) -> Option<(f32, f32)> {
-    let first = *values.first()?;
-    let (mut low, mut high) = (first, first);
-    for value in values {
-        low = low.min(*value);
-        high = high.max(*value);
-    }
+    let (low, high) = raw_range(values)?;
 
     if (high - low).abs() < f32::EPSILON {
         let padding = if low.abs() < f32::EPSILON {
@@ -272,14 +275,6 @@ pub fn summary(values: &[f32]) -> Option<Summary> {
     let (low, high) = raw_range(values)?;
     let mean = values.iter().sum::<f32>() / values.len() as f32;
     Some(Summary { low, mean, high })
-}
-
-/// True minimum and maximum, without the padding `bounds` adds for drawing.
-fn raw_range(values: &[f32]) -> Option<(f32, f32)> {
-    let first = *values.first()?;
-    Some(values.iter().fold((first, first), |(low, high), value| {
-        (low.min(*value), high.max(*value))
-    }))
 }
 
 #[cfg(test)]
