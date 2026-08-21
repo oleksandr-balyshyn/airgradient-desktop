@@ -9,6 +9,7 @@ use relm4::{gtk, prelude::*};
 
 use super::status::aqi_class;
 use super::trend::{format_metric_value, Preference, Trend};
+use crate::sensors::aqi::AqiBand;
 
 #[derive(Debug)]
 pub enum AqiCardInput {
@@ -156,33 +157,27 @@ impl SimpleComponent for AqiCard {
 
 /// Name of the US AQI band a value falls into.
 fn aqi_level(value: f32) -> &'static str {
-    match value {
-        value if value <= 50.0 => "Good",
-        value if value <= 100.0 => "Moderate",
-        value if value <= 150.0 => "Unhealthy for Sensitive Groups",
-        value if value <= 200.0 => "Unhealthy",
-        value if value <= 300.0 => "Very Unhealthy",
-        _ => "Hazardous",
+    match AqiBand::of(value) {
+        AqiBand::Good => "Good",
+        AqiBand::Moderate => "Moderate",
+        AqiBand::UnhealthyForSensitiveGroups => "Unhealthy for Sensitive Groups",
+        AqiBand::Unhealthy => "Unhealthy",
+        AqiBand::VeryUnhealthy => "Very Unhealthy",
+        AqiBand::Hazardous => "Hazardous",
     }
 }
 
 /// One-sentence explanation of what the band means for the people in the room.
 fn aqi_description(value: f32) -> &'static str {
-    match value {
-        value if value <= 50.0 => {
-            "Air quality is satisfactory, and air pollution poses little or no risk."
-        }
-        value if value <= 100.0 => {
+    match AqiBand::of(value) {
+        AqiBand::Good => "Air quality is satisfactory, and air pollution poses little or no risk.",
+        AqiBand::Moderate => {
             "Air quality is acceptable, but unusually sensitive people may notice effects."
         }
-        value if value <= 150.0 => "Sensitive groups may experience health effects.",
-        value if value <= 200.0 => {
-            "Some members of the general public may experience health effects."
-        }
-        value if value <= 300.0 => {
-            "Health alert: risk of health effects is increased for everyone."
-        }
-        _ => "Health warning: everyone is more likely to be affected.",
+        AqiBand::UnhealthyForSensitiveGroups => "Sensitive groups may experience health effects.",
+        AqiBand::Unhealthy => "Some members of the general public may experience health effects.",
+        AqiBand::VeryUnhealthy => "Health alert: risk of health effects is increased for everyone.",
+        AqiBand::Hazardous => "Health warning: everyone is more likely to be affected.",
     }
 }
 

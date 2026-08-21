@@ -8,6 +8,7 @@
 //! gradient, and its little status dot are all styled from one place, and the
 //! Rust side only ever passes a class name around.
 
+use crate::sensors::aqi::AqiBand;
 use crate::sensors::thresholds::StatusColor;
 
 /// Class used when a sensor value is missing or outside the classified range.
@@ -35,14 +36,15 @@ pub fn class_for(value: Option<f32>, classify: impl FnOnce(f32) -> StatusColor) 
 
 /// CSS class for the large AQI card, which uses the full six-step US AQI scale.
 pub fn aqi_class(value: Option<f32>) -> &'static str {
-    match value {
-        None => "aqi-good",
-        Some(value) if value <= 50.0 => "aqi-good",
-        Some(value) if value <= 100.0 => "aqi-moderate",
-        Some(value) if value <= 150.0 => "aqi-sensitive",
-        Some(value) if value <= 200.0 => "aqi-unhealthy",
-        Some(value) if value <= 300.0 => "aqi-very-unhealthy",
-        Some(_) => "aqi-hazardous",
+    // A card with no reading yet is styled like clean air rather than being
+    // given an alarming colour it has no evidence for.
+    match value.map(AqiBand::of).unwrap_or(AqiBand::Good) {
+        AqiBand::Good => "aqi-good",
+        AqiBand::Moderate => "aqi-moderate",
+        AqiBand::UnhealthyForSensitiveGroups => "aqi-sensitive",
+        AqiBand::Unhealthy => "aqi-unhealthy",
+        AqiBand::VeryUnhealthy => "aqi-very-unhealthy",
+        AqiBand::Hazardous => "aqi-hazardous",
     }
 }
 

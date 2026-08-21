@@ -86,6 +86,42 @@ pub const NOWCAST_HOURS: usize = 12;
 /// the newest reading alone.
 const MIN_NOWCAST_WEIGHT: f32 = 0.5;
 
+/// One of the six named bands of the US AQI scale.
+///
+/// The band boundaries are a single fact about the scale, so they are stated
+/// once, here, and everything that needs to say something about an index value
+/// starts from a band: `thresholds::aqi_status_color` turns it into a palette
+/// slot, `ui::status::aqi_class` into a CSS class, and the AQI card into the
+/// band's name and its one-sentence explanation. Before this existed the same
+/// five numbers were written out in three separate modules, so revising the
+/// scale meant finding all three.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum AqiBand {
+    Good,
+    Moderate,
+    UnhealthyForSensitiveGroups,
+    Unhealthy,
+    VeryUnhealthy,
+    Hazardous,
+}
+
+impl AqiBand {
+    /// The band an index value falls into.
+    ///
+    /// Each boundary belongs to the lower band: an AQI of exactly 50 is still
+    /// "Good", which is how the EPA publishes the scale.
+    pub fn of(value: f32) -> Self {
+        match value {
+            value if value <= 50.0 => Self::Good,
+            value if value <= 100.0 => Self::Moderate,
+            value if value <= 150.0 => Self::UnhealthyForSensitiveGroups,
+            value if value <= 200.0 => Self::Unhealthy,
+            value if value <= 300.0 => Self::VeryUnhealthy,
+            _ => Self::Hazardous,
+        }
+    }
+}
+
 /// Convert a PM2.5 concentration in ug/m3 to a US EPA AQI value.
 pub fn pm25_to_aqi(concentration: f32) -> f32 {
     if concentration <= 0.0 {
@@ -159,6 +195,20 @@ pub fn nowcast(hourly_means: &[Option<f32>]) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
+    use super::AqiBand;
+
+    #[test]
+    fn aqi_bands_put_each_boundary_in_the_lower_band() {
+        assert_eq!(AqiBand::of(0.0), AqiBand::Good);
+        assert_eq!(AqiBand::of(50.0), AqiBand::Good);
+        assert_eq!(AqiBand::of(50.1), AqiBand::Moderate);
+        assert_eq!(AqiBand::of(100.0), AqiBand::Moderate);
+        assert_eq!(AqiBand::of(150.0), AqiBand::UnhealthyForSensitiveGroups);
+        assert_eq!(AqiBand::of(200.0), AqiBand::Unhealthy);
+        assert_eq!(AqiBand::of(300.0), AqiBand::VeryUnhealthy);
+        assert_eq!(AqiBand::of(300.1), AqiBand::Hazardous);
+    }
+
     use super::{nowcast, pm25_to_aqi};
 
     #[test]

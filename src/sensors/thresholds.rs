@@ -4,6 +4,8 @@
 //! converts those slots into concrete `gdk::RGBA` values at the presentation
 //! boundary.
 
+use super::aqi::AqiBand;
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum StatusColor {
     Green,
@@ -53,13 +55,15 @@ pub fn nox_status_color(value: f32) -> StatusColor {
 }
 
 pub fn aqi_status_color(value: f32) -> StatusColor {
-    match value {
-        x if x <= 50.0 => StatusColor::Green,
-        x if x <= 100.0 => StatusColor::Yellow,
-        x if x <= 150.0 => StatusColor::Orange,
-        x if x <= 200.0 => StatusColor::Red,
-        x if x <= 300.0 => StatusColor::Purple,
-        _ => StatusColor::Gray,
+    // The band boundaries themselves belong to `sensors::aqi`, which owns the
+    // scale; this function only says which palette slot each band gets.
+    match AqiBand::of(value) {
+        AqiBand::Good => StatusColor::Green,
+        AqiBand::Moderate => StatusColor::Yellow,
+        AqiBand::UnhealthyForSensitiveGroups => StatusColor::Orange,
+        AqiBand::Unhealthy => StatusColor::Red,
+        AqiBand::VeryUnhealthy => StatusColor::Purple,
+        AqiBand::Hazardous => StatusColor::Gray,
     }
 }
 
