@@ -79,6 +79,26 @@ impl Dimension {
             Self::Humidity => (MIN_HUMIDITY_PCT, MAX_HUMIDITY_PCT),
         }
     }
+
+    /// The band this dimension starts out treating as comfortable.
+    ///
+    /// 18-26 °C and 40-60 % are the bands the dashboard cards used before these
+    /// became configurable, so someone upgrading sees exactly what they saw
+    /// before until they change them. They are also close to the usual
+    /// indoor-comfort guidance, which makes them a reasonable place for a new
+    /// user to start.
+    pub const fn default_range(self) -> ComfortRange {
+        match self {
+            Self::Temperature => ComfortRange {
+                min: 18.0,
+                max: 26.0,
+            },
+            Self::Humidity => ComfortRange {
+                min: 40.0,
+                max: 60.0,
+            },
+        }
+    }
 }
 
 /// A range a reading is comfortable inside, endpoints included.
@@ -212,8 +232,8 @@ pub struct ComfortThresholds {
 impl Default for ComfortThresholds {
     fn default() -> Self {
         Self {
-            temperature: default_temperature_range(),
-            humidity: default_humidity_range(),
+            temperature: Dimension::Temperature.default_range(),
+            humidity: Dimension::Humidity.default_range(),
         }
     }
 }
@@ -225,26 +245,6 @@ impl ComfortThresholds {
             temperature: temperature.map(|value| self.temperature.position(value)),
             humidity: humidity.map(|value| self.humidity.position(value)),
         }
-    }
-}
-
-/// The default comfortable temperature band, in °C.
-///
-/// 18–26 °C and 40–60 % are the bands the dashboard cards used before these
-/// became configurable, so someone upgrading sees exactly what they saw before
-/// until they change them. They are also close to the usual indoor-comfort
-/// guidance, which makes them a reasonable place for a new user to start.
-fn default_temperature_range() -> ComfortRange {
-    ComfortRange {
-        min: 18.0,
-        max: 26.0,
-    }
-}
-
-fn default_humidity_range() -> ComfortRange {
-    ComfortRange {
-        min: 40.0,
-        max: 60.0,
     }
 }
 
@@ -282,24 +282,19 @@ impl<'de> Deserialize<'de> for ComfortThresholds {
         fn range<E: serde::de::Error>(
             dimension: Dimension,
             stored: Option<StoredRange>,
-            fallback: fn() -> ComfortRange,
         ) -> Result<ComfortRange, E> {
             match stored {
                 Some(StoredRange { min, max }) => {
                     ComfortRange::new(dimension, min, max).map_err(E::custom)
                 }
-                None => Ok(fallback()),
+                None => Ok(dimension.default_range()),
             }
         }
 
         let stored = Stored::deserialize(deserializer)?;
         Ok(Self {
-            temperature: range(
-                Dimension::Temperature,
-                stored.temperature,
-                default_temperature_range,
-            )?,
-            humidity: range(Dimension::Humidity, stored.humidity, default_humidity_range)?,
+            temperature: range(Dimension::Temperature, stored.temperature)?,
+            humidity: range(Dimension::Humidity, stored.humidity)?,
         })
     }
 }
