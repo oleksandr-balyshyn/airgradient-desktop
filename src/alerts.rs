@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use crate::sensors::aqi::AqiBand;
 use crate::sensors::comfort::ComfortThresholds;
 use crate::sensors::AirMeasureSnapshot;
 
@@ -384,15 +385,18 @@ fn classify_co2(value: f32) -> Option<AlertSeverity> {
     }
 }
 
+/// How severe each AQI band is.
+///
+/// The band boundaries themselves belong to `sensors::aqi`, which owns the
+/// scale; this function only says which of them are worth a notification. That
+/// is the same split `thresholds::aqi_status_color` uses for the card colours,
+/// so an alert and a card can never disagree about which band a reading is in.
 fn classify_aqi(value: f32) -> Option<AlertSeverity> {
-    if value > 200.0 {
-        Some(AlertSeverity::Critical)
-    } else if value > 150.0 {
-        Some(AlertSeverity::Warning)
-    } else if value > 100.0 {
-        Some(AlertSeverity::Notice)
-    } else {
-        None
+    match AqiBand::of(value) {
+        AqiBand::Good | AqiBand::Moderate => None,
+        AqiBand::UnhealthyForSensitiveGroups => Some(AlertSeverity::Notice),
+        AqiBand::Unhealthy => Some(AlertSeverity::Warning),
+        AqiBand::VeryUnhealthy | AqiBand::Hazardous => Some(AlertSeverity::Critical),
     }
 }
 
@@ -448,10 +452,22 @@ fn classify_damp(value: f32) -> Option<AlertSeverity> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AlertMonitor, AlertSeverity};
+    use super::{classify_aqi, AlertMonitor, AlertSeverity};
     use crate::sensors::comfort::{ComfortRange, ComfortThresholds, Dimension};
     use crate::sensors::AirMeasureSnapshot;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn aqi_alert_severity_changes_on_the_published_band_boundaries() {
+        // Each boundary belongs to the lower band, so 150.0 is still the
+        // sensitive-groups notice and anything above it is a warning.
+        assert_eq!(classify_aqi(100.0), None);
+        assert_eq!(classify_aqi(100.1), Some(AlertSeverity::Notice));
+        assert_eq!(classify_aqi(150.0), Some(AlertSeverity::Notice));
+        assert_eq!(classify_aqi(150.1), Some(AlertSeverity::Warning));
+        assert_eq!(classify_aqi(200.0), Some(AlertSeverity::Warning));
+        assert_eq!(classify_aqi(200.1), Some(AlertSeverity::Critical));
+    }
 
     /// A monitor with notifications on and the default comfort ranges.
     fn monitor() -> AlertMonitor {
