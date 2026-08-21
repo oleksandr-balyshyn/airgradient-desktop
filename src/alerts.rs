@@ -85,130 +85,15 @@ impl AlertMonitor {
             return Vec::new();
         }
 
+        // A reading arrived, so whatever run of failed fetches came before it is
+        // over and the device is not offline.
         self.fetch_failures = 0;
+
         let mut alerts = Vec::new();
-
-        self.push_if_alert(
-            &mut alerts,
-            AlertKind::Co2,
-            snapshot.co2.and_then(classify_co2),
-            now,
-            |severity| match severity {
-                AlertSeverity::Notice => (
-                    "CO2 is above 800 ppm",
-                    "Ventilation may be low. Open a window or increase fresh-air ventilation.",
-                ),
-                AlertSeverity::Warning => (
-                    "CO2 is high",
-                    "CO2 is above 1200 ppm. Ventilate now if possible or reduce room occupancy.",
-                ),
-                AlertSeverity::Critical => (
-                    "CO2 is very high",
-                    "CO2 is above 2000 ppm. Leave briefly or improve ventilation immediately if possible.",
-                ),
-            },
-        );
-        self.push_if_alert(
-            &mut alerts,
-            AlertKind::Aqi,
-            snapshot.aqi.and_then(classify_aqi),
-            now,
-            |severity| match severity {
-                AlertSeverity::Notice => (
-                    "AQI is unhealthy for sensitive groups",
-                    "Reduce exposure if you are sensitive. Consider filtration or source control.",
-                ),
-                AlertSeverity::Warning => (
-                    "AQI is unhealthy",
-                    "Air quality may affect everyone. Reduce pollutant sources and improve filtration.",
-                ),
-                AlertSeverity::Critical => (
-                    "AQI is very unhealthy",
-                    "Limit exposure. Use filtration and avoid adding indoor pollution sources.",
-                ),
-            },
-        );
-        self.push_if_alert(
-            &mut alerts,
-            AlertKind::Pm25,
-            snapshot.pm25.and_then(classify_pm25),
-            now,
-            |severity| match severity {
-                AlertSeverity::Notice => (
-                    "PM2.5 is elevated",
-                    "Run an air purifier or improve HVAC filtration; reduce cooking, smoke, or dust sources.",
-                ),
-                AlertSeverity::Warning => (
-                    "PM2.5 is high",
-                    "Particle pollution is high. Use filtration and avoid activities that create particles.",
-                ),
-                AlertSeverity::Critical => (
-                    "PM2.5 is very high",
-                    "Limit exposure and use strong filtration. Check whether outdoor smoke or indoor sources are present.",
-                ),
-            },
-        );
-        self.push_if_alert(
-            &mut alerts,
-            AlertKind::Tvoc,
-            snapshot.tvoc.and_then(classify_tvoc),
-            now,
-            |severity| match severity {
-                AlertSeverity::Notice | AlertSeverity::Warning => (
-                    "VOC level is elevated",
-                    "Ventilate and check recent sources: cleaning products, paint, adhesives, or hobby materials.",
-                ),
-                AlertSeverity::Critical => (
-                    "VOC level is high",
-                    "Ventilate now and remove or seal likely chemical sources if safe to do so.",
-                ),
-            },
-        );
-        self.push_if_alert(
-            &mut alerts,
-            AlertKind::Nox,
-            snapshot.nox.and_then(classify_nox),
-            now,
-            |severity| match severity {
-                AlertSeverity::Notice | AlertSeverity::Warning => (
-                    "NOx level is elevated",
-                    "If cooking or using combustion appliances, use exhaust ventilation or open a window.",
-                ),
-                AlertSeverity::Critical => (
-                    "NOx level is high",
-                    "Increase ventilation and check combustion sources such as gas cooking or heaters.",
-                ),
-            },
-        );
-        self.push_if_alert(
-            &mut alerts,
-            AlertKind::HumidityLow,
-            snapshot.humidity.and_then(classify_humidity_low),
-            now,
-            |_| {
-                (
-                    "Humidity is low",
-                    "Air is dry. Consider humidification if the room feels uncomfortable.",
-                )
-            },
-        );
-        self.push_if_alert(
-            &mut alerts,
-            AlertKind::HumidityHigh,
-            snapshot.humidity.and_then(classify_humidity_high),
-            now,
-            |severity| match severity {
-                AlertSeverity::Notice | AlertSeverity::Warning => (
-                    "Humidity is high",
-                    "Ventilate or dehumidify to reduce dampness and mold risk.",
-                ),
-                AlertSeverity::Critical => (
-                    "Humidity is very high",
-                    "Dehumidify or ventilate now and check for dampness or leaks.",
-                ),
-            },
-        );
-
+        for rule in RULES {
+            let severity = (rule.read)(snapshot).and_then(rule.classify);
+            self.push_if_alert(&mut alerts, rule, severity, now);
+        }
         alerts
     }
 
@@ -239,30 +124,32 @@ impl AlertMonitor {
         )
     }
 
-    fn push_if_alert<F>(
+    /// Apply one rule's verdict to the running alert state.
+    ///
+    /// A reading that is fine clears the rule's history, so a value that dips in
+    /// and out of the threshold has to cross it for `ALERT_CONSECUTIVE_READINGS`
+    /// readings in a row again before it alerts.
+    fn push_if_alert(
         &mut self,
         alerts: &mut Vec<AlertNotification>,
-        kind: AlertKind,
+        rule: &AlertRule,
         severity: Option<AlertSeverity>,
         now: Instant,
-        text: F,
-    ) where
-        F: FnOnce(AlertSeverity) -> (&'static str, &'static str),
-    {
+    ) {
         let Some(severity) = severity else {
-            self.consecutive.remove(&kind);
-            self.active_severity.remove(&kind);
+            self.consecutive.remove(&rule.kind);
+            self.active_severity.remove(&rule.kind);
             return;
         };
 
-        let count = self.consecutive.entry(kind).or_insert(0);
+        let count = self.consecutive.entry(rule.kind).or_insert(0);
         *count = count.saturating_add(1);
         if *count < ALERT_CONSECUTIVE_READINGS {
             return;
         }
 
-        let (title, body) = text(severity);
-        if let Some(alert) = self.make_alert(kind, severity, now, title, body) {
+        let (title, body) = (rule.text)(severity);
+        if let Some(alert) = self.make_alert(rule.kind, severity, now, title, body) {
             alerts.push(alert);
         }
     }
@@ -297,6 +184,147 @@ impl AlertMonitor {
         })
     }
 }
+
+/// One thing the monitor watches.
+///
+/// Every watched reading needs the same four facts: which alert it is, where to
+/// find the value in a snapshot, how severe that value is, and what to tell the
+/// user. Writing them as a table means `evaluate_at` is a loop rather than seven
+/// near-identical blocks, and watching one more reading is one entry here.
+struct AlertRule {
+    kind: AlertKind,
+    /// How to read this rule's value out of a snapshot.
+    read: fn(&AirMeasureSnapshot) -> Option<f32>,
+    /// How bad that value is, or `None` when it needs no alert.
+    classify: fn(f32) -> Option<AlertSeverity>,
+    /// Notification title and body for a given severity.
+    text: fn(AlertSeverity) -> (&'static str, &'static str),
+}
+
+/// Every reading the monitor watches, in the order alerts are reported.
+const RULES: &[AlertRule] = &[
+    AlertRule {
+        kind: AlertKind::Co2,
+        read: |snapshot| snapshot.co2,
+        classify: classify_co2,
+        text: |severity| {
+            match severity {
+            AlertSeverity::Notice => (
+                "CO2 is above 800 ppm",
+                "Ventilation may be low. Open a window or increase fresh-air ventilation.",
+            ),
+            AlertSeverity::Warning => (
+                "CO2 is high",
+                "CO2 is above 1200 ppm. Ventilate now if possible or reduce room occupancy.",
+            ),
+            AlertSeverity::Critical => (
+                "CO2 is very high",
+                "CO2 is above 2000 ppm. Leave briefly or improve ventilation immediately if possible.",
+            ),
+        }
+        },
+    },
+    AlertRule {
+        kind: AlertKind::Aqi,
+        read: |snapshot| snapshot.aqi,
+        classify: classify_aqi,
+        text: |severity| match severity {
+            AlertSeverity::Notice => (
+                "AQI is unhealthy for sensitive groups",
+                "Reduce exposure if you are sensitive. Consider filtration or source control.",
+            ),
+            AlertSeverity::Warning => (
+                "AQI is unhealthy",
+                "Air quality may affect everyone. Reduce pollutant sources and improve filtration.",
+            ),
+            AlertSeverity::Critical => (
+                "AQI is very unhealthy",
+                "Limit exposure. Use filtration and avoid adding indoor pollution sources.",
+            ),
+        },
+    },
+    AlertRule {
+        kind: AlertKind::Pm25,
+        read: |snapshot| snapshot.pm25,
+        classify: classify_pm25,
+        text: |severity| {
+            match severity {
+            AlertSeverity::Notice => (
+                "PM2.5 is elevated",
+                "Run an air purifier or improve HVAC filtration; reduce cooking, smoke, or dust sources.",
+            ),
+            AlertSeverity::Warning => (
+                "PM2.5 is high",
+                "Particle pollution is high. Use filtration and avoid activities that create particles.",
+            ),
+            AlertSeverity::Critical => (
+                "PM2.5 is very high",
+                "Limit exposure and use strong filtration. Check whether outdoor smoke or indoor sources are present.",
+            ),
+        }
+        },
+    },
+    AlertRule {
+        kind: AlertKind::Tvoc,
+        read: |snapshot| snapshot.tvoc,
+        classify: classify_tvoc,
+        text: |severity| {
+            match severity {
+            AlertSeverity::Notice | AlertSeverity::Warning => (
+                "VOC level is elevated",
+                "Ventilate and check recent sources: cleaning products, paint, adhesives, or hobby materials.",
+            ),
+            AlertSeverity::Critical => (
+                "VOC level is high",
+                "Ventilate now and remove or seal likely chemical sources if safe to do so.",
+            ),
+        }
+        },
+    },
+    AlertRule {
+        kind: AlertKind::Nox,
+        read: |snapshot| snapshot.nox,
+        classify: classify_nox,
+        text: |severity| {
+            match severity {
+            AlertSeverity::Notice | AlertSeverity::Warning => (
+                "NOx level is elevated",
+                "If cooking or using combustion appliances, use exhaust ventilation or open a window.",
+            ),
+            AlertSeverity::Critical => (
+                "NOx level is high",
+                "Increase ventilation and check combustion sources such as gas cooking or heaters.",
+            ),
+        }
+        },
+    },
+    AlertRule {
+        kind: AlertKind::HumidityLow,
+        read: |snapshot| snapshot.humidity,
+        classify: classify_humidity_low,
+        text: |_| {
+            (
+                "Humidity is low",
+                "Air is dry. Consider humidification if the room feels uncomfortable.",
+            )
+        },
+    },
+    AlertRule {
+        kind: AlertKind::HumidityHigh,
+        read: |snapshot| snapshot.humidity,
+        classify: classify_humidity_high,
+        text: |severity| match severity {
+            AlertSeverity::Notice | AlertSeverity::Warning => (
+                "Humidity is high",
+                "Ventilate or dehumidify to reduce dampness and mold risk.",
+            ),
+            AlertSeverity::Critical => (
+                "Humidity is very high",
+                "Dehumidify or ventilate now and check for dampness or leaks.",
+            ),
+        },
+    },
+];
 
 fn classify_co2(value: f32) -> Option<AlertSeverity> {
     if value > 2000.0 {
