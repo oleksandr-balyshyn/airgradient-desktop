@@ -88,14 +88,14 @@ impl Dashboard {
         metric_id: &str,
         value: Option<f32>,
         previous: Option<f32>,
-        reported_unit: Option<&str>,
+        reported_unit: Option<&'static str>,
     ) {
         let metric = metrics::find(metric_id);
         let unit = reported_unit.unwrap_or(metric.unit);
 
         card.emit(SensorCardInput::Show(Reading {
             value,
-            unit: reported_unit.map(str::to_string),
+            unit: reported_unit,
             status_class: metric.status_class(value),
             trend: Trend::between(value, previous, unit, Preference::LowerIsBetter),
         }));

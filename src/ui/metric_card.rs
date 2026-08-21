@@ -23,8 +23,9 @@ pub enum MetricCardInput {
     Show {
         /// Latest reading, or `None` when the sensor is not reporting.
         current: Option<f32>,
-        /// Unit reported alongside the reading, when it differs from the default.
-        unit: Option<String>,
+        /// Unit reported alongside the reading, when it differs from the metric's
+        /// own. Static: every unit in the app is a compile-time string.
+        unit: Option<&'static str>,
         /// Readings over time, oldest first.
         series: Vec<f32>,
     },
@@ -32,7 +33,7 @@ pub enum MetricCardInput {
 
 pub struct MetricCard {
     metric: &'static Metric,
-    unit: String,
+    unit: &'static str,
     current: Option<f32>,
     /// Lowest, mean and highest reading in the plotted range.
     range: Option<Summary>,
@@ -114,7 +115,7 @@ impl SimpleComponent for MetricCard {
 
                 gtk::Label {
                     #[watch]
-                    set_label: model.unit.as_str(),
+                    set_label: model.unit,
                     set_halign: gtk::Align::End,
                     set_valign: gtk::Align::Baseline,
                     add_css_class: "metric-unit",
@@ -140,7 +141,7 @@ impl SimpleComponent for MetricCard {
     ) -> ComponentParts<Self> {
         let model = Self {
             metric: init.metric,
-            unit: init.metric.unit.to_string(),
+            unit: init.metric.unit,
             current: None,
             range: None,
             status_class: UNKNOWN_CLASS,

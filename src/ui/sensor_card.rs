@@ -73,7 +73,10 @@ pub struct Reading {
     pub value: Option<f32>,
     /// Some devices report VOC/NOx as an index rather than ppb, so the unit can
     /// change at runtime. `None` keeps the unit the card was created with.
-    pub unit: Option<String>,
+    ///
+    /// Static because every unit in the app is one of a handful of compile-time
+    /// strings, whichever device reported it.
+    pub unit: Option<&'static str>,
     pub status_class: &'static str,
     pub trend: Trend,
 }
@@ -85,7 +88,7 @@ pub enum SensorCardInput {
 
 pub struct SensorCard {
     title: &'static str,
-    unit: String,
+    unit: &'static str,
     icon_name: &'static str,
     size: CardSize,
     value: Option<f32>,
@@ -178,7 +181,7 @@ impl SimpleComponent for SensorCard {
 
                 gtk::Label {
                     #[watch]
-                    set_label: model.unit.as_str(),
+                    set_label: model.unit,
                     set_halign: gtk::Align::Start,
                     add_css_class: "metric-unit",
                 },
@@ -207,7 +210,7 @@ impl SimpleComponent for SensorCard {
     ) -> ComponentParts<Self> {
         let model = Self {
             title: init.title,
-            unit: init.unit.to_string(),
+            unit: init.unit,
             icon_name: init.icon_name,
             size: init.size,
             value: None,

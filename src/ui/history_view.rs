@@ -153,11 +153,11 @@ impl SimpleComponent for HistoryView {
 /// VOC and NOx can arrive as either a sensor index or a concentration in ppb, so
 /// the card's default label is corrected from the reading itself. Every other
 /// metric has a fixed unit.
-fn reported_unit(metric_id: &str, snapshot: &AirMeasureSnapshot) -> Option<String> {
+fn reported_unit(metric_id: &str, snapshot: &AirMeasureSnapshot) -> Option<&'static str> {
     let unit = match metric_id {
         TVOC_ID => snapshot.tvoc_unit,
         NOX_ID => snapshot.nox_unit,
         _ => None,
     };
-    unit.map(GasUnit::as_str).map(str::to_string)
+    unit.map(GasUnit::as_str)
 }
