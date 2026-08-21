@@ -8,6 +8,7 @@
 use relm4::gtk::prelude::*;
 use relm4::{gtk, prelude::*};
 
+use super::metrics::{self, Metric, HUMIDITY_ID, TEMPERATURE_ID};
 use super::trend::{Preference, Trend};
 use crate::sensors::comfort::{Dimension, Position};
 
@@ -25,17 +26,13 @@ pub enum EnvironmentKind {
 }
 
 impl EnvironmentKind {
-    const fn title(self) -> &'static str {
+    /// This card's entry in the metric table, which owns its name, icon and
+    /// unit — the same entry the History tab renders, so the two tabs cannot
+    /// end up calling the same reading different things.
+    fn metric(self) -> &'static Metric {
         match self {
-            Self::Temperature => "Temperature",
-            Self::Humidity => "Humidity",
-        }
-    }
-
-    const fn icon_name(self) -> &'static str {
-        match self {
-            Self::Temperature => "airgradient-temperature-symbolic",
-            Self::Humidity => "airgradient-humidity-symbolic",
+            Self::Temperature => metrics::find(TEMPERATURE_ID),
+            Self::Humidity => metrics::find(HUMIDITY_ID),
         }
     }
 
@@ -44,14 +41,6 @@ impl EnvironmentKind {
         match self {
             Self::Temperature => "temperature-widget",
             Self::Humidity => "humidity-widget",
-        }
-    }
-
-    /// Unit shown after the value and in the trend label.
-    const fn unit(self) -> &'static str {
-        match self {
-            Self::Temperature => "°C",
-            Self::Humidity => "%",
         }
     }
 
@@ -92,7 +81,7 @@ pub struct EnvironmentCard {
 impl EnvironmentCard {
     fn value_text(&self) -> String {
         match self.value {
-            Some(value) => format!("{value:.0}{}", self.kind.unit()),
+            Some(value) => format!("{value:.0}{}", self.kind.metric().unit),
             None => "--".to_string(),
         }
     }
@@ -143,9 +132,9 @@ impl SimpleComponent for EnvironmentCard {
                 add_css_class: "metric-icon",
 
                 gtk::Image {
-                    set_icon_name: Some(model.kind.icon_name()),
+                    set_icon_name: Some(model.kind.metric().icon),
                     set_pixel_size: 40,
-                    set_tooltip_text: Some(model.kind.title()),
+                    set_tooltip_text: Some(model.kind.metric().title),
                     set_halign: gtk::Align::Center,
                     set_valign: gtk::Align::Center,
                 },
@@ -158,7 +147,7 @@ impl SimpleComponent for EnvironmentCard {
                 set_valign: gtk::Align::Center,
 
                 gtk::Label {
-                    set_label: model.kind.title(),
+                    set_label: model.kind.metric().title,
                     set_halign: gtk::Align::Start,
                     add_css_class: "metric-title",
                 },
@@ -227,9 +216,14 @@ impl SimpleComponent for EnvironmentCard {
                 self.position = position;
                 // Temperature and humidity have a comfortable middle rather than
                 // a "lower is better" scale, so a rising value is not inherently
-                // worse. `lower_is_better: true` keeps the arrow colors matching
-                // the previous release's behavior.
-                self.trend = Trend::between(value, previous, self.kind.unit(), Preference::Neither);
+                // worse: the arrow shows the movement without a good-or-bad
+                // verdict. See `Preference::Neither`.
+                self.trend = Trend::between(
+                    value,
+                    previous,
+                    self.kind.metric().unit,
+                    Preference::Neither,
+                );
             }
             EnvironmentCardInput::SetPosition(position) => self.position = position,
         }

@@ -7,6 +7,7 @@
 use relm4::gtk::prelude::*;
 use relm4::{gtk, prelude::*};
 
+use super::metrics::{self, Metric, AQI_ID};
 use super::status::aqi_class;
 use super::trend::{format_metric_value, Preference, Trend};
 use crate::sensors::aqi::AqiBand;
@@ -20,6 +21,9 @@ pub enum AqiCardInput {
 }
 
 pub struct AqiCard {
+    /// This card's entry in the metric table, which owns its name, icon and
+    /// unit.
+    metric: &'static Metric,
     value: Option<f32>,
     trend: Trend,
 }
@@ -61,7 +65,7 @@ impl SimpleComponent for AqiCard {
                 add_css_class: "aqi-icon",
 
                 gtk::Image {
-                    set_icon_name: Some("airgradient-air-quality-symbolic"),
+                    set_icon_name: Some(model.metric.icon),
                     set_pixel_size: 56,
                     set_halign: gtk::Align::Center,
                     set_valign: gtk::Align::Center,
@@ -75,7 +79,7 @@ impl SimpleComponent for AqiCard {
                 set_valign: gtk::Align::Center,
 
                 gtk::Label {
-                    set_label: "Air Quality Index",
+                    set_label: model.metric.title,
                     set_halign: gtk::Align::Start,
                     add_css_class: "metric-title",
                 },
@@ -137,6 +141,7 @@ impl SimpleComponent for AqiCard {
         _sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let model = Self {
+            metric: metrics::find(AQI_ID),
             value: None,
             trend: Trend::default(),
         };
@@ -149,7 +154,8 @@ impl SimpleComponent for AqiCard {
         match message {
             AqiCardInput::Show { value, previous } => {
                 self.value = value;
-                self.trend = Trend::between(value, previous, "AQI", Preference::LowerIsBetter);
+                self.trend =
+                    Trend::between(value, previous, self.metric.unit, Preference::LowerIsBetter);
             }
         }
     }
