@@ -153,11 +153,7 @@ impl App {
 
     /// Page to show when the user asks for "home".
     fn home_page(&self) -> Page {
-        if self.has_server_url() {
-            Page::Dashboard
-        } else {
-            Page::Welcome
-        }
+        home_page_for(self.has_server_url())
     }
 
     /// Human-readable age of the most recent successful fetch.
@@ -380,11 +376,7 @@ impl Component for App {
 
         let mut model = Self {
             // A configured device means there is data worth showing immediately.
-            page: if config.server_url.is_some() {
-                Page::Dashboard
-            } else {
-                Page::Welcome
-            },
+            page: home_page_for(config.server_url.is_some()),
             server_url: config.server_url.clone(),
             refresh_interval_secs: config.refresh_interval.as_secs(),
             seconds_since_fetch: 0,
@@ -639,30 +631,39 @@ impl App {
     }
 }
 
+/// The page a launch, or a press of the Home button, should land on.
+///
+/// With no device configured there is nothing to show but onboarding.
+const fn home_page_for(has_server_url: bool) -> Page {
+    if has_server_url {
+        Page::Dashboard
+    } else {
+        Page::Welcome
+    }
+}
+
 /// Register the application-level actions used outside the window.
 ///
 /// `app.show-dashboard` is what a notification's default action and its "Open
 /// Dashboard" button activate, so clicking an alert brings the app forward.
 fn install_app_actions(sender: &ComponentSender<App>) {
-    let app = relm4::main_application();
+    add_app_action("show-dashboard", sender, || AppInput::ShowWindow);
+    add_app_action("quit", sender, || AppInput::Quit);
+}
 
-    let show_dashboard = gio::SimpleAction::new("show-dashboard", None);
-    show_dashboard.connect_activate({
+/// Add one action that turns an activation into a message for this component.
+///
+/// The message is built by a function rather than passed in because `AppInput`
+/// is not `Clone`, and the closure the action holds may be called many times.
+fn add_app_action(name: &str, sender: &ComponentSender<App>, message: fn() -> AppInput) {
+    let action = gio::SimpleAction::new(name, None);
+    action.connect_activate({
         let sender = sender.input_sender().clone();
         move |_, _| {
-            let _ = sender.send(AppInput::ShowWindow);
+            let _ = sender.send(message());
         }
     });
-    app.add_action(&show_dashboard);
-
-    let quit = gio::SimpleAction::new("quit", None);
-    quit.connect_activate({
-        let sender = sender.input_sender().clone();
-        move |_, _| {
-            let _ = sender.send(AppInput::Quit);
-        }
-    });
-    app.add_action(&quit);
+    relm4::main_application().add_action(&action);
 }
 
 #[cfg(test)]
