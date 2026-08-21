@@ -181,6 +181,32 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_normalizes_a_bare_host_and_serializes_it_back() {
+        // A config file is written by hand as often as by the app, so loading one
+        // must apply the same normalization the settings form applies. The input
+        // here needs both a scheme and a trailing slash removed, so the test
+        // fails if the `Deserialize` impl ever stops routing through `parse`.
+        let url: DeviceBaseUrl =
+            serde_json::from_str("\"192.168.1.201/\"").expect("a bare host should deserialize");
+
+        assert_eq!(url.as_str(), "http://192.168.1.201");
+        assert_eq!(
+            serde_json::to_string(&url).expect("a base URL should serialize"),
+            "\"http://192.168.1.201\""
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_an_empty_device_url() {
+        // `parse` maps an empty string to "not configured", which is a valid
+        // absence but not a valid `DeviceBaseUrl`; only this impl rejects it.
+        let err = serde_json::from_str::<DeviceBaseUrl>("\"\"")
+            .expect_err("an empty string is not a base URL");
+
+        assert!(err.to_string().contains("device base URL cannot be empty"));
+    }
+
+    #[test]
     fn parse_server_url_rejects_unsupported_schemes() {
         let err = parse_server_url("ftp://airgradient.local").expect_err("ftp is unsupported");
 
