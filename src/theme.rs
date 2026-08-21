@@ -238,6 +238,20 @@ pub const THEMES: &[Theme] = &[
     Theme::plain(DEFAULT_THEME_ID, "System Default", Variant::System),
     Theme::plain("adwaita-light", "Adwaita Light", Variant::Light),
     Theme::plain("adwaita-dark", "Adwaita Dark", Variant::Dark),
+    // AirGradient's own brand colours, taken from the design tokens published in
+    // airgradient.com's stylesheet: the primary blue `--primaryColor500`, the
+    // body text colour `--main-text-color` on the site's off-white page tint,
+    // and for the dark entry the `--dark-mode-page-bg` and `--dark-mode-accent`
+    // the site switches to. The blue is lighter in dark mode for the same reason
+    // the site lightens it: the brand blue is too dim to read against navy.
+    Theme::light("airgradient", "AirGradient", 0xf5f8fb, 0x212121, 0x1c75bc),
+    Theme::dark(
+        "airgradient-dark",
+        "AirGradient Dark",
+        0x0f172a,
+        0xf5f8fb,
+        0x60a5fa,
+    ),
     // Catppuccin
     Theme::light(
         "catppuccin-latte",
@@ -592,6 +606,17 @@ mod tests {
                 theme.id
             );
         }
+    }
+
+    #[test]
+    fn the_airgradient_themes_use_the_brand_blue() {
+        // The identifiers are written to config files, and the accent is what
+        // makes the theme recognisably AirGradient's, so both are pinned here.
+        let light = find("airgradient").palette.expect("light palette");
+        assert_eq!(light.accent.to_css(), "#1c75bc");
+
+        let dark = find("airgradient-dark").palette.expect("dark palette");
+        assert_eq!(dark.background.to_css(), "#0f172a");
     }
 
     #[test]
