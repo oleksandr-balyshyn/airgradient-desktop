@@ -17,13 +17,7 @@ use super::metrics::{self, CO2_ID, NOX_ID, PM003_COUNT_ID, PM10_ID, PM1_ID, PM25
 use super::sensor_card::{CardSize, Reading, SensorCard, SensorCardInit, SensorCardInput};
 use super::trend::{Preference, Trend};
 use crate::sensors::comfort::ComfortThresholds;
-use crate::sensors::{AirMeasureSnapshot, GasUnit};
-
-/// Unit label for a gas reading, defaulting to the sensor index used by
-/// AirGradient's own firmware when a payload did not say.
-fn gas_unit_label(unit: Option<GasUnit>) -> &'static str {
-    unit.unwrap_or(GasUnit::Index).as_str()
-}
+use crate::sensors::AirMeasureSnapshot;
 
 /// Height of the PM2.5 history chart on the main view.
 ///
@@ -135,22 +129,22 @@ impl Dashboard {
 
         // The gases report either a sensor index or a concentration depending on
         // the device, so their unit comes from the payload rather than the card.
-        let tvoc_unit = gas_unit_label(snapshot.tvoc_unit);
+        let tvoc_unit = metrics::find(TVOC_ID).reported_unit(snapshot);
         Self::show_sensor(
             &self.tvoc,
             TVOC_ID,
             snapshot.tvoc,
             previous.and_then(|previous| previous.tvoc),
-            Some(tvoc_unit),
+            tvoc_unit,
         );
 
-        let nox_unit = gas_unit_label(snapshot.nox_unit);
+        let nox_unit = metrics::find(NOX_ID).reported_unit(snapshot);
         Self::show_sensor(
             &self.nox,
             NOX_ID,
             snapshot.nox,
             previous.and_then(|previous| previous.nox),
-            Some(nox_unit),
+            nox_unit,
         );
 
         Self::show_sensor(

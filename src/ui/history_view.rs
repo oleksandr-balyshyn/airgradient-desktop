@@ -12,8 +12,8 @@ use relm4::gtk::prelude::*;
 use relm4::{adw, gtk, prelude::*};
 
 use super::metric_card::{MetricCard, MetricCardInit, MetricCardInput};
-use super::metrics::{METRICS, NOX_ID, TVOC_ID};
-use crate::sensors::{AirMeasureSnapshot, GasUnit};
+use super::metrics::METRICS;
+use crate::sensors::AirMeasureSnapshot;
 
 /// Height of each card's chart.
 const CHART_HEIGHT: i32 = 64;
@@ -139,25 +139,11 @@ impl SimpleComponent for HistoryView {
                 for (card, metric) in self.cards.iter().zip(METRICS) {
                     card.emit(MetricCardInput::Show {
                         current: latest.and_then(|snapshot| metric.value(snapshot)),
-                        unit: latest.and_then(|snapshot| reported_unit(metric.id, snapshot)),
+                        unit: latest.and_then(|snapshot| metric.reported_unit(snapshot)),
                         series: metric.series(&snapshots),
                     });
                 }
             }
         }
     }
-}
-
-/// Unit the device actually reported for a gas reading.
-///
-/// VOC and NOx can arrive as either a sensor index or a concentration in ppb, so
-/// the card's default label is corrected from the reading itself. Every other
-/// metric has a fixed unit.
-fn reported_unit(metric_id: &str, snapshot: &AirMeasureSnapshot) -> Option<&'static str> {
-    let unit = match metric_id {
-        TVOC_ID => snapshot.tvoc_unit,
-        NOX_ID => snapshot.nox_unit,
-        _ => None,
-    };
-    unit.map(GasUnit::as_str)
 }

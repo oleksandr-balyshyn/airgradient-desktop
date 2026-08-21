@@ -12,7 +12,7 @@ use crate::sensors::thresholds::{
     aqi_status_color, co2_status_color, nox_status_color, pm25_status_color, tvoc_status_color,
     StatusColor,
 };
-use crate::sensors::AirMeasureSnapshot;
+use crate::sensors::{AirMeasureSnapshot, GasUnit};
 
 /// Accent for readings with no agreed indoor health thresholds.
 const NEUTRAL_CLASS: &str = "status-blue";
@@ -35,6 +35,18 @@ pub struct Metric {
     classify: Option<fn(f32) -> StatusColor>,
     /// Colour used when `classify` is `None`.
     fixed_class: &'static str,
+    /// The unit the device reported for this reading, where it can vary.
+    ///
+    /// VOC and NOx arrive as a unitless sensor index from AirGradient's own
+    /// firmware and as a concentration in ppb from some compatible local-server
+    /// implementations, so the payload has the last word. Everything else has a
+    /// fixed unit and uses `no_reported_unit`.
+    read_unit: fn(&AirMeasureSnapshot) -> Option<GasUnit>,
+}
+
+/// The reader for metrics whose unit never varies.
+fn no_reported_unit(_: &AirMeasureSnapshot) -> Option<GasUnit> {
+    None
 }
 
 impl Metric {
@@ -48,6 +60,13 @@ impl Metric {
             Some(classify) => status::class_for(value, classify),
             None => self.fixed_class,
         }
+    }
+
+    /// The unit this reading arrived in, when the device said.
+    ///
+    /// `None` means the metric's own `unit` is the right label.
+    pub fn reported_unit(&self, snapshot: &AirMeasureSnapshot) -> Option<&'static str> {
+        (self.read_unit)(snapshot).map(GasUnit::as_str)
     }
 
     /// This metric's readings across a run of snapshots, oldest first.
@@ -91,6 +110,7 @@ pub const METRICS: &[Metric] = &[
         read: |snapshot| snapshot.aqi,
         classify: Some(aqi_status_color),
         fixed_class: NEUTRAL_CLASS,
+        read_unit: no_reported_unit,
     },
     Metric {
         id: CO2_ID,
@@ -100,6 +120,7 @@ pub const METRICS: &[Metric] = &[
         read: |snapshot| snapshot.co2,
         classify: Some(co2_status_color),
         fixed_class: NEUTRAL_CLASS,
+        read_unit: no_reported_unit,
     },
     Metric {
         id: TEMPERATURE_ID,
@@ -109,6 +130,7 @@ pub const METRICS: &[Metric] = &[
         read: |snapshot| snapshot.temperature,
         classify: None,
         fixed_class: NEUTRAL_CLASS,
+        read_unit: no_reported_unit,
     },
     Metric {
         id: HUMIDITY_ID,
@@ -118,6 +140,7 @@ pub const METRICS: &[Metric] = &[
         read: |snapshot| snapshot.humidity,
         classify: None,
         fixed_class: NEUTRAL_CLASS,
+        read_unit: no_reported_unit,
     },
     Metric {
         id: TVOC_ID,
@@ -127,6 +150,7 @@ pub const METRICS: &[Metric] = &[
         read: |snapshot| snapshot.tvoc,
         classify: Some(tvoc_status_color),
         fixed_class: NEUTRAL_CLASS,
+        read_unit: |snapshot| snapshot.tvoc_unit,
     },
     Metric {
         id: NOX_ID,
@@ -136,6 +160,7 @@ pub const METRICS: &[Metric] = &[
         read: |snapshot| snapshot.nox,
         classify: Some(nox_status_color),
         fixed_class: NEUTRAL_CLASS,
+        read_unit: |snapshot| snapshot.nox_unit,
     },
     Metric {
         id: PM003_COUNT_ID,
@@ -145,6 +170,7 @@ pub const METRICS: &[Metric] = &[
         read: |snapshot| snapshot.pm003_count,
         classify: None,
         fixed_class: NEUTRAL_CLASS,
+        read_unit: no_reported_unit,
     },
     Metric {
         id: PM1_ID,
@@ -154,6 +180,7 @@ pub const METRICS: &[Metric] = &[
         read: |snapshot| snapshot.pm1,
         classify: None,
         fixed_class: NEUTRAL_CLASS,
+        read_unit: no_reported_unit,
     },
     Metric {
         id: PM25_ID,
@@ -163,6 +190,7 @@ pub const METRICS: &[Metric] = &[
         read: |snapshot| snapshot.pm25,
         classify: Some(pm25_status_color),
         fixed_class: NEUTRAL_CLASS,
+        read_unit: no_reported_unit,
     },
     Metric {
         id: PM10_ID,
@@ -172,6 +200,7 @@ pub const METRICS: &[Metric] = &[
         read: |snapshot| snapshot.pm10,
         classify: None,
         fixed_class: COARSE_CLASS,
+        read_unit: no_reported_unit,
     },
 ];
 
@@ -194,7 +223,7 @@ mod tests {
         find, AQI_ID, CO2_ID, HUMIDITY_ID, METRICS, NOX_ID, PM003_COUNT_ID, PM10_ID, PM1_ID,
         PM25_ID, TEMPERATURE_ID, TVOC_ID,
     };
-    use crate::sensors::AirMeasureSnapshot;
+    use crate::sensors::{AirMeasureSnapshot, GasUnit};
     use crate::ui::status::UNKNOWN_CLASS;
 
     fn snapshot() -> AirMeasureSnapshot {
@@ -304,6 +333,27 @@ mod tests {
         // reports; a device sending a concentration overrides it per reading.
         assert_eq!(find(TVOC_ID).unit, "index");
         assert_eq!(find(NOX_ID).unit, "index");
+    }
+
+    #[test]
+    fn only_the_gases_take_their_unit_from_the_payload() {
+        let reported = AirMeasureSnapshot {
+            tvoc_unit: Some(GasUnit::Ppb),
+            nox_unit: Some(GasUnit::Index),
+            ..snapshot()
+        };
+
+        assert_eq!(find(TVOC_ID).reported_unit(&reported), Some("ppb"));
+        assert_eq!(find(NOX_ID).reported_unit(&reported), Some("index"));
+        // Everything else has a fixed unit, whatever the payload contains.
+        assert_eq!(find(CO2_ID).reported_unit(&reported), None);
+        assert_eq!(find(PM25_ID).reported_unit(&reported), None);
+    }
+
+    #[test]
+    fn a_payload_that_names_no_gas_unit_falls_back_to_the_metrics_own() {
+        assert_eq!(find(TVOC_ID).reported_unit(&snapshot()), None);
+        assert_eq!(find(TVOC_ID).unit, "index");
     }
 
     #[test]
