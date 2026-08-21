@@ -153,7 +153,7 @@ fn gas_unit(value: Option<f32>, raw: &Value, index_keys: &[&str]) -> Option<GasU
 /// This searches top-level keys first, then recursively searches nested objects
 /// and arrays. That makes the parser tolerant of payloads that wrap sensor
 /// values in a `measurements` object.
-pub fn extract_measurement_value(raw: &Value, candidates: &[&str]) -> Option<f32> {
+fn extract_measurement_value(raw: &Value, candidates: &[&str]) -> Option<f32> {
     candidates.iter().find_map(|name| {
         if let Some(value) = raw.get(*name).and_then(as_f32) {
             return Some(value);

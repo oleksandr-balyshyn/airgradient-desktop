@@ -29,10 +29,6 @@ impl DeviceBaseUrl {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
 }
 
 impl fmt::Display for DeviceBaseUrl {
@@ -113,7 +109,13 @@ pub fn fetch_current_measurements(base_url: &DeviceBaseUrl) -> DeviceResult<AirM
     Ok(parse_air_measurements(&payload))
 }
 
-pub fn parse_server_url(raw: &str) -> DeviceResult<Option<String>> {
+/// Normalize what a user typed into a base URL, or `None` when they typed
+/// nothing.
+///
+/// Private because the normalized form is an implementation detail of
+/// `DeviceBaseUrl`: outside this module a device address is that type, never a
+/// bare string that may or may not have been checked.
+fn parse_server_url(raw: &str) -> DeviceResult<Option<String>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(None);

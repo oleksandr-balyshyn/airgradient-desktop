@@ -112,18 +112,6 @@ impl History {
             .collect()
     }
 
-    /// Pull one metric out of the history as a plain series.
-    ///
-    /// Readings where the sensor reported nothing are skipped rather than
-    /// substituted with zero, because zero is a legitimate measurement and would
-    /// draw a misleading dip in a chart.
-    pub fn series(&self, metric: impl Fn(&AirMeasureSnapshot) -> Option<f32>) -> Vec<f32> {
-        self.samples
-            .iter()
-            .filter_map(|sample| metric(&sample.snapshot))
-            .collect()
-    }
-
     /// Mean of one metric for each of the last `hours` hours, most recent first.
     ///
     /// An hour with no readings is `None` rather than zero, so a gap in
@@ -255,6 +243,18 @@ mod tests {
         }
     }
 
+    /// The CO2 readings a history holds, oldest first.
+    ///
+    /// Charts pull a series out through `ui::metrics`; this is just a compact
+    /// way for these tests to say what a history ended up containing.
+    fn co2_series(history: &History) -> Vec<f32> {
+        history
+            .samples()
+            .iter()
+            .filter_map(|sample| sample.snapshot.co2)
+            .collect()
+    }
+
     fn sample(recorded_at: u64, co2: f32) -> Sample {
         Sample {
             recorded_at,
@@ -269,7 +269,7 @@ mod tests {
         history.push(sample(2, 500.0));
 
         assert_eq!(history.len(), 2);
-        assert_eq!(history.series(|snapshot| snapshot.co2), vec![400.0, 500.0]);
+        assert_eq!(co2_series(&history), vec![400.0, 500.0]);
         assert_eq!(history.latest(), Some(&snapshot(500.0)));
     }
 
@@ -281,10 +281,7 @@ mod tests {
         }
 
         assert_eq!(history.len(), 3);
-        assert_eq!(
-            history.series(|snapshot| snapshot.co2),
-            vec![300.0, 400.0, 500.0]
-        );
+        assert_eq!(co2_series(&history), vec![300.0, 400.0, 500.0]);
     }
 
     #[test]
@@ -296,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn series_skips_missing_readings_instead_of_zeroing_them() {
+    fn missing_readings_are_stored_without_being_zeroed() {
         let mut history = History::with_capacity(10);
         history.push(sample(1, 400.0));
         history.push(Sample {
@@ -305,7 +302,7 @@ mod tests {
         });
         history.push(sample(3, 600.0));
 
-        assert_eq!(history.series(|snapshot| snapshot.co2), vec![400.0, 600.0]);
+        assert_eq!(co2_series(&history), vec![400.0, 600.0]);
     }
 
     #[test]
@@ -336,10 +333,7 @@ mod tests {
         let loaded = History::load_from_path(&path, 4);
 
         assert_eq!(loaded.len(), 4);
-        assert_eq!(
-            loaded.series(|snapshot| snapshot.co2),
-            vec![7.0, 8.0, 9.0, 10.0]
-        );
+        assert_eq!(co2_series(&loaded), vec![7.0, 8.0, 9.0, 10.0]);
         let _ = std::fs::remove_file(&path);
     }
 
