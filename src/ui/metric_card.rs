@@ -7,7 +7,7 @@
 use relm4::gtk::prelude::*;
 use relm4::{gtk, prelude::*};
 
-use super::chart::{summary, Chart, ChartInput};
+use super::chart::{summary, Chart, ChartInput, Summary};
 use super::metrics::Metric;
 use super::status::UNKNOWN_CLASS;
 use super::trend::format_metric_value;
@@ -35,7 +35,7 @@ pub struct MetricCard {
     unit: String,
     current: Option<f32>,
     /// Lowest, mean and highest reading in the plotted range.
-    range: Option<(f32, f32, f32)>,
+    range: Option<Summary>,
     status_class: &'static str,
     chart: Controller<Chart>,
 }
@@ -53,7 +53,7 @@ impl MetricCard {
     /// The summary line under the chart, for example `low 12 · avg 20 · high 34`.
     fn range_text(&self) -> String {
         match self.range {
-            Some((low, mean, high)) => format!(
+            Some(Summary { low, mean, high }) => format!(
                 "low {} · avg {} · high {}",
                 format_metric_value(low),
                 format_metric_value(mean),

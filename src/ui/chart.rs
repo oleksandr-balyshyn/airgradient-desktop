@@ -255,11 +255,23 @@ pub fn plot_points(values: &[f32], width: f64, height: f64) -> Option<Vec<(f64, 
     )
 }
 
+/// What the summary line under a chart reports.
+///
+/// A named struct rather than an `(f32, f32, f32)` because nothing about a
+/// triple of numbers says which one is the mean, and a caller that mixed up the
+/// order would produce a plausible-looking wrong line rather than an error.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Summary {
+    pub low: f32,
+    pub mean: f32,
+    pub high: f32,
+}
+
 /// Lowest, mean and highest reading, for a chart's summary line.
-pub fn summary(values: &[f32]) -> Option<(f32, f32, f32)> {
+pub fn summary(values: &[f32]) -> Option<Summary> {
     let (low, high) = raw_range(values)?;
     let mean = values.iter().sum::<f32>() / values.len() as f32;
-    Some((low, mean, high))
+    Some(Summary { low, mean, high })
 }
 
 /// True minimum and maximum, without the padding `bounds` adds for drawing.
@@ -272,7 +284,7 @@ fn raw_range(values: &[f32]) -> Option<(f32, f32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bounds, downsample, plot_points, summary, MAX_POINTS};
+    use super::{bounds, downsample, plot_points, summary, Summary, MAX_POINTS};
 
     #[test]
     fn bounds_of_an_empty_series_are_undefined() {
@@ -383,7 +395,7 @@ mod tests {
 
     #[test]
     fn summary_reports_low_mean_and_high() {
-        let (low, mean, high) = summary(&[2.0, 4.0, 6.0]).expect("series has a summary");
+        let Summary { low, mean, high } = summary(&[2.0, 4.0, 6.0]).expect("series has a summary");
 
         assert_eq!((low, high), (2.0, 6.0));
         assert_eq!(mean, 4.0);
