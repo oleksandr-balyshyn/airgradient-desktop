@@ -72,20 +72,50 @@ pub enum Bound {
     Max,
 }
 
+/// One comfort range as the two spin rows currently hold it.
+///
+/// Loose numbers rather than a `ComfortRange` because the ends are edited one
+/// at a time, and dragging the minimum above the maximum has to be allowed to
+/// happen before it is tidied up on save. Turning the pair into a checked range
+/// is `to_range`'s job, at the moment the user asks to save.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RangeForm {
+    min: f64,
+    max: f64,
+}
+
+impl RangeForm {
+    fn from_range(range: ComfortRange) -> Self {
+        Self {
+            min: f64::from(range.min()),
+            max: f64::from(range.max()),
+        }
+    }
+
+    fn bound_mut(&mut self, bound: Bound) -> &mut f64 {
+        match bound {
+            Bound::Min => &mut self.min,
+            Bound::Max => &mut self.max,
+        }
+    }
+
+    /// The checked range these two numbers describe.
+    ///
+    /// Clamped rather than rejected: two spin buttons can be dragged past each
+    /// other, and refusing to save at that moment would be a worse answer than
+    /// using the pair the right way round.
+    fn to_range(self, dimension: Dimension) -> ComfortRange {
+        ComfortRange::clamped(dimension, self.min as f32, self.max as f32)
+    }
+}
+
 pub struct Settings {
     url_text: String,
     interval_secs: f64,
     notifications_enabled: bool,
     start_minimized: bool,
-    /// The four comfort bounds as the spin rows currently hold them.
-    ///
-    /// Kept as loose numbers rather than as `ComfortRange` values because the
-    /// two ends are edited one at a time, and dragging the minimum above the
-    /// maximum has to be allowed to happen before it is tidied up on save.
-    temperature_min: f64,
-    temperature_max: f64,
-    humidity_min: f64,
-    humidity_max: f64,
+    temperature: RangeForm,
+    humidity: RangeForm,
     theme_id: String,
     status: String,
 }
@@ -99,13 +129,11 @@ impl Settings {
     /// unusable value is never written to disk.
     /// Store one edited comfort bound.
     fn set_comfort_bound(&mut self, dimension: Dimension, bound: Bound, value: f64) {
-        let field = match (dimension, bound) {
-            (Dimension::Temperature, Bound::Min) => &mut self.temperature_min,
-            (Dimension::Temperature, Bound::Max) => &mut self.temperature_max,
-            (Dimension::Humidity, Bound::Min) => &mut self.humidity_min,
-            (Dimension::Humidity, Bound::Max) => &mut self.humidity_max,
+        let form = match dimension {
+            Dimension::Temperature => &mut self.temperature,
+            Dimension::Humidity => &mut self.humidity,
         };
-        *field = value;
+        *form.bound_mut(bound) = value;
     }
 
     fn validate(&self) -> Result<AppConfig, String> {
@@ -117,21 +145,9 @@ impl Settings {
         // something impossible. Clamping keeps the bounds defined in one place.
         let refresh_interval = RefreshInterval::clamped(self.interval_secs.round() as u64);
 
-        // The comfort bounds are clamped rather than rejected for the same
-        // reason: two spin buttons can be dragged past each other, and a refusal
-        // to save at that moment would be a worse answer than using the pair the
-        // right way round.
         let comfort = ComfortThresholds {
-            temperature: ComfortRange::clamped(
-                Dimension::Temperature,
-                self.temperature_min as f32,
-                self.temperature_max as f32,
-            ),
-            humidity: ComfortRange::clamped(
-                Dimension::Humidity,
-                self.humidity_min as f32,
-                self.humidity_max as f32,
-            ),
+            temperature: self.temperature.to_range(Dimension::Temperature),
+            humidity: self.humidity.to_range(Dimension::Humidity),
         };
 
         Ok(AppConfig {
@@ -271,7 +287,7 @@ impl SimpleComponent for Settings {
                     set_title: "Coolest Comfortable Temperature",
                     set_subtitle: "Below this, the room is reported as cool (°C)",
                     set_adjustment: Some(&gtk::Adjustment::new(
-                        model.temperature_min,
+                        model.temperature.min,
                         f64::from(MIN_TEMPERATURE_C),
                         f64::from(MAX_TEMPERATURE_C),
                         0.5,
@@ -293,7 +309,7 @@ impl SimpleComponent for Settings {
                     set_title: "Warmest Comfortable Temperature",
                     set_subtitle: "Above this, the room is reported as warm (°C)",
                     set_adjustment: Some(&gtk::Adjustment::new(
-                        model.temperature_max,
+                        model.temperature.max,
                         f64::from(MIN_TEMPERATURE_C),
                         f64::from(MAX_TEMPERATURE_C),
                         0.5,
@@ -315,7 +331,7 @@ impl SimpleComponent for Settings {
                     set_title: "Driest Comfortable Humidity",
                     set_subtitle: "Below this, the room is reported as dry (%)",
                     set_adjustment: Some(&gtk::Adjustment::new(
-                        model.humidity_min,
+                        model.humidity.min,
                         f64::from(MIN_HUMIDITY_PCT),
                         f64::from(MAX_HUMIDITY_PCT),
                         1.0,
@@ -336,7 +352,7 @@ impl SimpleComponent for Settings {
                     set_title: "Most Humid Comfortable Humidity",
                     set_subtitle: "Above this, the room is reported as humid (%)",
                     set_adjustment: Some(&gtk::Adjustment::new(
-                        model.humidity_max,
+                        model.humidity.max,
                         f64::from(MIN_HUMIDITY_PCT),
                         f64::from(MAX_HUMIDITY_PCT),
                         1.0,
@@ -387,10 +403,8 @@ impl SimpleComponent for Settings {
             interval_secs: init.refresh_interval.as_secs() as f64,
             notifications_enabled: init.notifications_enabled,
             start_minimized: init.start_minimized,
-            temperature_min: f64::from(init.comfort.temperature.min()),
-            temperature_max: f64::from(init.comfort.temperature.max()),
-            humidity_min: f64::from(init.comfort.humidity.min()),
-            humidity_max: f64::from(init.comfort.humidity.max()),
+            temperature: RangeForm::from_range(init.comfort.temperature),
+            humidity: RangeForm::from_range(init.comfort.humidity),
             theme_id: init.theme_id,
             status: init.status,
         };
@@ -431,7 +445,7 @@ impl SimpleComponent for Settings {
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{RangeForm, Settings};
     use crate::config::{RefreshInterval, MIN_REFRESH_INTERVAL_SECS};
     use crate::theme::DEFAULT_THEME_ID;
 
@@ -441,10 +455,14 @@ mod tests {
             interval_secs,
             notifications_enabled: true,
             start_minimized: false,
-            temperature_min: 18.0,
-            temperature_max: 26.0,
-            humidity_min: 40.0,
-            humidity_max: 60.0,
+            temperature: RangeForm {
+                min: 18.0,
+                max: 26.0,
+            },
+            humidity: RangeForm {
+                min: 40.0,
+                max: 60.0,
+            },
             theme_id: DEFAULT_THEME_ID.to_string(),
             status: String::new(),
         }
@@ -486,6 +504,37 @@ mod tests {
             .expect("interval should be clamped");
 
         assert_eq!(config.refresh_interval.as_secs(), MIN_REFRESH_INTERVAL_SECS);
+    }
+
+    #[test]
+    fn saved_config_carries_the_comfort_ranges() {
+        let mut form = form("192.168.1.201", 30.0);
+        form.temperature = RangeForm {
+            min: 19.0,
+            max: 23.0,
+        };
+
+        let config = form.validate().expect("form should be valid");
+
+        assert_eq!(config.comfort.temperature.min(), 19.0);
+        assert_eq!(config.comfort.temperature.max(), 23.0);
+    }
+
+    #[test]
+    fn comfort_bounds_dragged_past_each_other_are_saved_the_right_way_round() {
+        // Both spin rows are free to move, so the minimum can end up above the
+        // maximum mid-edit. Saving then must not store a range that calls every
+        // reading uncomfortable.
+        let mut form = form("192.168.1.201", 30.0);
+        form.humidity = RangeForm {
+            min: 65.0,
+            max: 35.0,
+        };
+
+        let config = form.validate().expect("swapped bounds should still save");
+
+        assert_eq!(config.comfort.humidity.min(), 35.0);
+        assert_eq!(config.comfort.humidity.max(), 65.0);
     }
 
     #[test]
