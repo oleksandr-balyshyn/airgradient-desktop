@@ -134,14 +134,9 @@ impl SimpleComponent for HistoryView {
         match message {
             HistoryViewInput::Show(snapshots) => {
                 self.recorded = snapshots.len();
-                let latest = snapshots.last();
 
                 for (card, metric) in self.cards.iter().zip(METRICS) {
-                    card.emit(MetricCardInput::Show {
-                        current: latest.and_then(|snapshot| metric.value(snapshot)),
-                        unit: latest.and_then(|snapshot| metric.reported_unit(snapshot)),
-                        series: metric.series(&snapshots),
-                    });
+                    card.emit(MetricCardInput::show(metric, &snapshots));
                 }
             }
         }

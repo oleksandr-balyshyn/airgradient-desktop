@@ -11,6 +11,7 @@ use super::chart::{summary, Chart, ChartInput, Summary};
 use super::metrics::Metric;
 use super::status::UNKNOWN_CLASS;
 use super::trend::{format_metric_value, format_optional_metric_value};
+use crate::sensors::AirMeasureSnapshot;
 
 /// Which metric to show, and how tall to draw its chart.
 pub struct MetricCardInit {
@@ -29,6 +30,22 @@ pub enum MetricCardInput {
         /// Readings over time, oldest first.
         series: Vec<f32>,
     },
+}
+
+impl MetricCardInput {
+    /// The card's view of one metric over a run of snapshots.
+    ///
+    /// Both tabs show metric cards, so this is the single place that decides
+    /// what a card is told: the newest reading, the unit that reading arrived
+    /// with, and the whole series to plot.
+    pub fn show(metric: &Metric, snapshots: &[AirMeasureSnapshot]) -> Self {
+        let latest = snapshots.last();
+        Self::Show {
+            current: latest.and_then(|snapshot| metric.value(snapshot)),
+            unit: latest.and_then(|snapshot| metric.reported_unit(snapshot)),
+            series: metric.series(snapshots),
+        }
+    }
 }
 
 pub struct MetricCard {

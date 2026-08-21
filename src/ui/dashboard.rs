@@ -365,12 +365,8 @@ impl SimpleComponent for Dashboard {
                 }
             }
             DashboardInput::ShowHistory(snapshots) => {
-                let metric = metrics::find(PM25_ID);
-                self.pm25_history.emit(MetricCardInput::Show {
-                    current: snapshots.last().and_then(|snapshot| metric.value(snapshot)),
-                    unit: None,
-                    series: metric.series(&snapshots),
-                });
+                self.pm25_history
+                    .emit(MetricCardInput::show(metrics::find(PM25_ID), &snapshots));
             }
         }
     }
