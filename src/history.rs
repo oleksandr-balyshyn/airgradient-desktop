@@ -14,7 +14,6 @@
 //! directory, which is the convention for exactly this distinction.
 
 use std::collections::VecDeque;
-use std::env;
 use std::fs::read_to_string;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -23,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::sensors::AirMeasureSnapshot;
-use crate::storage::write_atomically;
+use crate::storage::{write_atomically, xdg_app_dir};
 
 /// How many samples to keep.
 ///
@@ -238,22 +237,10 @@ pub fn history_path() -> PathBuf {
 
 /// The app's XDG data directory.
 ///
-/// Falls back the same way `config::config_dir` does: `$XDG_DATA_HOME`, then
-/// `$HOME/.local/share`, then the current directory, so the path is always
-/// deterministic even in unusual environments.
+/// History is data the app recorded, not a setting the user chose, so it lives
+/// under `$XDG_DATA_HOME` rather than beside `config.json`.
 pub fn data_dir() -> PathBuf {
-    env::var("XDG_DATA_HOME")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            env::var("HOME")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .map(|home| PathBuf::from(home).join(".local").join("share"))
-        })
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("airgradient-desktop")
+    xdg_app_dir("XDG_DATA_HOME", ".local/share")
 }
 
 #[cfg(test)]

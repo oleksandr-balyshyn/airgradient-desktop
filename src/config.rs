@@ -4,7 +4,6 @@
 //! Runtime-only values, such as the last measurements kept for trend display,
 //! intentionally stay in memory and are not written here.
 
-use std::env;
 use std::fmt;
 use std::fs::read_to_string;
 use std::io;
@@ -13,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::device::DeviceBaseUrl;
-use crate::storage::write_atomically;
+use crate::storage::{write_atomically, xdg_app_dir};
 use crate::theme::DEFAULT_THEME_ID;
 
 pub const DEFAULT_REFRESH_INTERVAL_SECS: u64 = 30;
@@ -209,19 +208,5 @@ pub fn config_path() -> PathBuf {
 }
 
 pub fn config_dir() -> PathBuf {
-    // Follow the XDG Base Directory convention first. If it is unavailable,
-    // fall back to `$HOME/.config`, then finally to the current directory so the
-    // app still has a deterministic path in unusual environments.
-    env::var("XDG_CONFIG_HOME")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            env::var("HOME")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .map(|home| PathBuf::from(home).join(".config"))
-        })
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("airgradient-desktop")
+    xdg_app_dir("XDG_CONFIG_HOME", ".config")
 }

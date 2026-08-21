@@ -4,12 +4,46 @@
 //! every save, history on every refresh -- so both are exposed to being
 //! interrupted halfway through a write.
 
+use std::env;
 use std::fs::{create_dir_all, rename, File};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Extension used for the temporary file a write goes to first.
 const PENDING_EXTENSION: &str = "tmp";
+
+/// Directory this app owns inside whichever XDG base directory is in use.
+const APP_DIRECTORY: &str = "airgradient-desktop";
+
+/// The app's directory under one of the XDG base directories.
+///
+/// The XDG Base Directory specification puts settings under `$XDG_CONFIG_HOME`
+/// and recorded data under `$XDG_DATA_HOME`, which is why this app keeps its
+/// config file and its history file apart. Both lookups follow the same three
+/// steps, so they are written once here: use the base variable if it is set,
+/// otherwise the conventional path under `$HOME`, otherwise the current
+/// directory, so the path is always deterministic even in an environment that
+/// sets neither.
+///
+/// `base_variable` is the environment variable to try first, for example
+/// `XDG_DATA_HOME`; `home_fallback` is the path under `$HOME` the specification
+/// names as that variable's default, for example `.local/share`.
+pub fn xdg_app_dir(base_variable: &str, home_fallback: &str) -> PathBuf {
+    let is_set = |value: &String| !value.trim().is_empty();
+
+    env::var(base_variable)
+        .ok()
+        .filter(is_set)
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var("HOME")
+                .ok()
+                .filter(is_set)
+                .map(|home| PathBuf::from(home).join(home_fallback))
+        })
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(APP_DIRECTORY)
+}
 
 /// Write a file so that it is either fully replaced or left untouched.
 ///
