@@ -13,7 +13,7 @@ use relm4::gtk::prelude::*;
 use relm4::{gtk, prelude::*};
 
 use super::status::UNKNOWN_CLASS;
-use super::trend::{format_metric_value, Trend};
+use super::trend::{format_optional_metric_value, Trend};
 
 /// How much visual weight a card gets.
 ///
@@ -113,8 +113,7 @@ impl SensorCard {
     }
 
     fn value_text(&self) -> String {
-        self.value
-            .map_or_else(|| "--".to_string(), format_metric_value)
+        format_optional_metric_value(self.value)
     }
 }
 

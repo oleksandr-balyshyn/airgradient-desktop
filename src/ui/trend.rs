@@ -121,6 +121,13 @@ pub fn format_metric_value(value: f32) -> String {
     }
 }
 
+/// A reading's text, or `--` when the device did not report that sensor.
+///
+/// A missing reading is not zero, so it gets a placeholder rather than a number.
+pub fn format_optional_metric_value(value: Option<f32>) -> String {
+    value.map_or_else(|| "--".to_string(), format_metric_value)
+}
+
 /// Format a delta. Deltas use a wider "no decimals" band than raw values
 /// because a change of `+12.3 ppm` reads no better than `+12 ppm`.
 fn format_delta(value: f32) -> String {
@@ -133,7 +140,15 @@ fn format_delta(value: f32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_metric_value, Preference, Trend, TrendDirection};
+    use super::{
+        format_metric_value, format_optional_metric_value, Preference, Trend, TrendDirection,
+    };
+
+    #[test]
+    fn a_missing_reading_formats_as_a_placeholder() {
+        assert_eq!(format_optional_metric_value(None), "--");
+        assert_eq!(format_optional_metric_value(Some(13.24)), "13.2");
+    }
 
     #[test]
     fn missing_current_reading_is_neutral() {

@@ -10,7 +10,7 @@ use relm4::{gtk, prelude::*};
 use super::chart::{summary, Chart, ChartInput, Summary};
 use super::metrics::Metric;
 use super::status::UNKNOWN_CLASS;
-use super::trend::format_metric_value;
+use super::trend::{format_metric_value, format_optional_metric_value};
 
 /// Which metric to show, and how tall to draw its chart.
 pub struct MetricCardInit {
@@ -47,8 +47,7 @@ impl MetricCard {
     }
 
     fn value_text(&self) -> String {
-        self.current
-            .map_or_else(|| "--".to_string(), format_metric_value)
+        format_optional_metric_value(self.current)
     }
 
     /// The summary line under the chart, for example `low 12 · avg 20 · high 34`.

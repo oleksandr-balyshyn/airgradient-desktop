@@ -9,7 +9,7 @@ use relm4::{gtk, prelude::*};
 
 use super::metrics::{self, Metric, AQI_ID};
 use super::status::aqi_class;
-use super::trend::{format_metric_value, Preference, Trend};
+use super::trend::{format_optional_metric_value, Preference, Trend};
 use crate::sensors::aqi::AqiBand;
 
 #[derive(Debug)]
@@ -30,8 +30,7 @@ pub struct AqiCard {
 
 impl AqiCard {
     fn value_text(&self) -> String {
-        self.value
-            .map_or_else(|| "--".to_string(), format_metric_value)
+        format_optional_metric_value(self.value)
     }
 
     fn level_text(&self) -> &'static str {
