@@ -27,11 +27,15 @@ pub fn co2_status_color(value: f32) -> StatusColor {
 }
 
 pub fn pm25_status_color(value: f32) -> StatusColor {
-    // PM2.5 thresholds use common AQI breakpoints.
+    // The cut points are the tops of the Good, Moderate and "unhealthy for
+    // sensitive groups" bands of `sensors::aqi::PM25_BANDS` (EPA, revised 2024),
+    // so the PM2.5 card and the AQI card cannot disagree about the same reading.
+    // The four slots stay Green/Yellow/Orange/Red rather than routing through
+    // `aqi_status_color`, which would add Purple and Gray to this card.
     match value {
-        x if x < 12.0 => StatusColor::Green,
-        x if x < 35.0 => StatusColor::Yellow,
-        x if x < 55.0 => StatusColor::Orange,
+        x if x < 9.1 => StatusColor::Green,
+        x if x < 35.5 => StatusColor::Yellow,
+        x if x < 55.5 => StatusColor::Orange,
         _ => StatusColor::Red,
     }
 }
@@ -81,10 +85,16 @@ mod tests {
 
     #[test]
     fn pm25_thresholds_classify_boundary_values() {
-        assert_eq!(pm25_status_color(11.9), StatusColor::Green);
+        assert_eq!(pm25_status_color(9.0), StatusColor::Green);
+        assert_eq!(pm25_status_color(9.1), StatusColor::Yellow);
+        // 12.0 was Green under the pre-2024 breakpoints. It is Moderate on the
+        // AQI scale, so it is Yellow here too — see
+        // `aqi::tests::the_revised_bands_are_stricter_than_the_old_ones`.
         assert_eq!(pm25_status_color(12.0), StatusColor::Yellow);
-        assert_eq!(pm25_status_color(35.0), StatusColor::Orange);
-        assert_eq!(pm25_status_color(55.0), StatusColor::Red);
+        assert_eq!(pm25_status_color(35.4), StatusColor::Yellow);
+        assert_eq!(pm25_status_color(35.5), StatusColor::Orange);
+        assert_eq!(pm25_status_color(55.4), StatusColor::Orange);
+        assert_eq!(pm25_status_color(55.5), StatusColor::Red);
     }
 
     #[test]
