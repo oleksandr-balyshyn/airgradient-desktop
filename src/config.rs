@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::device::DeviceBaseUrl;
+use crate::sensors::comfort::ComfortThresholds;
 use crate::storage::{write_atomically, xdg_app_dir};
 use crate::theme::DEFAULT_THEME_ID;
 
@@ -107,6 +108,12 @@ pub struct AppConfig {
     /// Whether the app should start hidden and keep polling in the background.
     #[serde(default)]
     pub start_minimized: bool,
+    /// Temperature and humidity ranges the user finds comfortable.
+    ///
+    /// Missing from config files written before comfort alerts existed, so an
+    /// absent field means the defaults rather than a parse failure.
+    #[serde(default)]
+    pub comfort: ComfortThresholds,
     /// Identifier of the selected colour theme, as defined in `theme::THEMES`.
     ///
     /// Stored as a plain string rather than an enum so that a config file
@@ -123,6 +130,7 @@ impl Default for AppConfig {
             refresh_interval: RefreshInterval::DEFAULT,
             notifications_enabled: default_notifications_enabled(),
             start_minimized: false,
+            comfort: ComfortThresholds::default(),
             theme: default_theme(),
         }
     }

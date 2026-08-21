@@ -328,6 +328,7 @@ impl Component for App {
                 refresh_interval: config.refresh_interval,
                 notifications_enabled: config.notifications_enabled,
                 start_minimized: config.start_minimized,
+                comfort: config.comfort,
                 theme_id: config.theme.clone(),
                 status: startup_notice.as_ref().map_or_else(
                     || "Enter a URL like http://192.168.1.201".to_string(),
@@ -381,7 +382,7 @@ impl Component for App {
             fetch_in_flight: false,
             last_updated: None,
             history: History::load(),
-            alerts: AlertMonitor::new(config.notifications_enabled),
+            alerts: AlertMonitor::new(config.notifications_enabled, config.comfort),
             dashboard,
             history_view,
             settings,
@@ -400,6 +401,10 @@ impl Component for App {
                 .emit(DashboardInput::Show(Box::new(latest.clone())));
         }
         model.publish_history();
+
+        model
+            .dashboard
+            .emit(DashboardInput::SetComfort(config.comfort));
 
         model.dashboard.emit(DashboardInput::SetServerUrl(
             config
@@ -596,6 +601,9 @@ impl App {
         self.server_url = config.server_url.clone();
         self.refresh_interval_secs = config.refresh_interval.as_secs();
         self.alerts.set_enabled(config.notifications_enabled);
+        self.alerts.set_comfort(config.comfort);
+        self.dashboard
+            .emit(DashboardInput::SetComfort(config.comfort));
         self.last_updated = None;
 
         let url_text = config

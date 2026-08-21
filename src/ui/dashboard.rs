@@ -16,6 +16,7 @@ use super::metric_card::{MetricCard, MetricCardInit, MetricCardInput};
 use super::metrics::{self, CO2_ID, NOX_ID, PM003_COUNT_ID, PM10_ID, PM1_ID, PM25_ID, TVOC_ID};
 use super::sensor_card::{CardSize, Reading, SensorCard, SensorCardInit, SensorCardInput};
 use super::trend::{Preference, Trend};
+use crate::sensors::comfort::ComfortThresholds;
 use crate::sensors::{AirMeasureSnapshot, GasUnit};
 
 /// Unit label for a gas reading, defaulting to the sensor index used by
@@ -43,6 +44,8 @@ pub enum DashboardInput {
     SetStatus(String),
     /// Recorded readings for the PM2.5 chart, oldest first.
     ShowHistory(Rc<Vec<AirMeasureSnapshot>>),
+    /// The comfort ranges the user chose, from startup or from a settings save.
+    SetComfort(ComfortThresholds),
 }
 
 pub struct Dashboard {
@@ -60,6 +63,11 @@ pub struct Dashboard {
     pm25_history: Controller<MetricCard>,
     /// The previous snapshot, kept only to compute trend arrows.
     previous: Option<AirMeasureSnapshot>,
+    /// Ranges the temperature and humidity cards are judged against.
+    comfort: ComfortThresholds,
+    /// The latest reading, kept so the two environment cards can be repainted
+    /// when the comfort ranges change without waiting for the next fetch.
+    latest: Option<AirMeasureSnapshot>,
     server_text: String,
     status_text: String,
 }
@@ -98,13 +106,17 @@ impl Dashboard {
             value: snapshot.aqi,
             previous: previous.and_then(|previous| previous.aqi),
         });
+
+        let comfort = self.comfort.assess(snapshot.temperature, snapshot.humidity);
         self.temperature.emit(EnvironmentCardInput::Show {
             value: snapshot.temperature,
             previous: previous.and_then(|previous| previous.temperature),
+            position: comfort.temperature,
         });
         self.humidity.emit(EnvironmentCardInput::Show {
             value: snapshot.humidity,
             previous: previous.and_then(|previous| previous.humidity),
+            position: comfort.humidity,
         });
 
         Self::show_sensor(
@@ -350,6 +362,8 @@ impl SimpleComponent for Dashboard {
                 })
                 .detach(),
             previous: None,
+            comfort: ComfortThresholds::default(),
+            latest: None,
             server_text: "Server URL: Not configured".to_string(),
             status_text: "Press refresh to load current measurements.".to_string(),
         };
@@ -374,6 +388,7 @@ impl SimpleComponent for Dashboard {
         match message {
             DashboardInput::Show(snapshot) => {
                 self.distribute(&snapshot);
+                self.latest = Some(snapshot.as_ref().clone());
                 self.previous = Some(*snapshot);
                 self.status_text = "Latest measurements loaded.".to_string();
             }
@@ -384,6 +399,19 @@ impl SimpleComponent for Dashboard {
                 };
             }
             DashboardInput::SetStatus(status) => self.status_text = status,
+            DashboardInput::SetComfort(comfort) => {
+                self.comfort = comfort;
+                // Repaint the two cards now. Waiting for the next fetch would
+                // leave the highlight describing the ranges the user just
+                // replaced, for up to a full refresh interval.
+                if let Some(latest) = self.latest.as_ref() {
+                    let assessment = comfort.assess(latest.temperature, latest.humidity);
+                    self.temperature
+                        .emit(EnvironmentCardInput::SetPosition(assessment.temperature));
+                    self.humidity
+                        .emit(EnvironmentCardInput::SetPosition(assessment.humidity));
+                }
+            }
             DashboardInput::ShowHistory(snapshots) => {
                 let metric = metrics::find(PM25_ID);
                 self.pm25_history.emit(MetricCardInput::Show {

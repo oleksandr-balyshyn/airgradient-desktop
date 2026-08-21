@@ -9,6 +9,13 @@ use relm4::gtk::prelude::*;
 use relm4::{gtk, prelude::*};
 
 use super::trend::{Preference, Trend};
+use crate::sensors::comfort::{Dimension, Position};
+
+/// Highlight for a reading outside the user's comfort range.
+///
+/// Amber rather than red: an uncomfortable room is worth acting on, but it is
+/// not the health warning that red means elsewhere on the dashboard.
+const UNCOMFORTABLE_CLASS: &str = "status-orange";
 
 /// Which environmental reading a card shows.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -48,22 +55,11 @@ impl EnvironmentKind {
         }
     }
 
-    /// Plain-language comfort verdict.
-    ///
-    /// These bands are deliberately simple UI labels for quick scanning. They
-    /// are not medical or HVAC recommendations.
-    fn comfort(self, value: f32) -> &'static str {
+    /// The reading this card shows, as the comfort logic names it.
+    const fn dimension(self) -> Dimension {
         match self {
-            Self::Temperature => match value {
-                value if value < 18.0 => "Cool",
-                value if value <= 26.0 => "Comfortable",
-                _ => "Warm",
-            },
-            Self::Humidity => match value {
-                value if value < 40.0 => "Dry",
-                value if value <= 60.0 => "Comfortable",
-                _ => "Humid",
-            },
+            Self::Temperature => Dimension::Temperature,
+            Self::Humidity => Dimension::Humidity,
         }
     }
 }
@@ -73,12 +69,23 @@ pub enum EnvironmentCardInput {
     Show {
         value: Option<f32>,
         previous: Option<f32>,
+        /// Where the reading sits in the user's comfort range, or `None` when
+        /// the device did not report it.
+        position: Option<Position>,
     },
+    /// Re-judge the reading already on the card.
+    ///
+    /// Sent when the user edits the comfort ranges, so the highlight follows the
+    /// new ranges immediately. It deliberately leaves the value and the trend
+    /// alone: nothing was measured, only the definition of comfortable changed.
+    SetPosition(Option<Position>),
 }
 
 pub struct EnvironmentCard {
     kind: EnvironmentKind,
     value: Option<f32>,
+    /// Where the reading sits in the user's comfort range.
+    position: Option<Position>,
     trend: Trend,
 }
 
@@ -91,8 +98,27 @@ impl EnvironmentCard {
     }
 
     fn comfort_text(&self) -> String {
-        let comfort = self.value.map_or("--", |value| self.kind.comfort(value));
+        let comfort = self
+            .position
+            .map_or("--", |position| self.kind.dimension().word(position));
         format!("Comfort: {comfort}")
+    }
+
+    /// The card's classes, including the highlight for a reading the user asked
+    /// to be told about.
+    ///
+    /// A reading outside the comfort range takes the same amber styling the
+    /// sensor cards use for a value worth acting on, so "this needs attention"
+    /// looks the same everywhere on the dashboard. The whole list is rebuilt on
+    /// every reading rather than adding and removing one class, which is how a
+    /// stale highlight would otherwise survive a return to comfort.
+    fn css_classes(&self) -> Vec<&'static str> {
+        let mut classes = vec!["card", "metric-card", self.kind.css_class()];
+
+        if self.position.is_some_and(Position::is_uncomfortable) {
+            classes.push(UNCOMFORTABLE_CLASS);
+        }
+        classes
     }
 }
 
@@ -108,7 +134,8 @@ impl SimpleComponent for EnvironmentCard {
             set_spacing: 16,
             set_hexpand: true,
             set_vexpand: true,
-            set_css_classes: &["card", "metric-card", model.kind.css_class()],
+            #[watch]
+            set_css_classes: &model.css_classes(),
 
             gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
@@ -181,6 +208,7 @@ impl SimpleComponent for EnvironmentCard {
         let model = Self {
             kind,
             value: None,
+            position: None,
             trend: Trend::default(),
         };
 
@@ -190,14 +218,20 @@ impl SimpleComponent for EnvironmentCard {
 
     fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
         match message {
-            EnvironmentCardInput::Show { value, previous } => {
+            EnvironmentCardInput::Show {
+                value,
+                previous,
+                position,
+            } => {
                 self.value = value;
+                self.position = position;
                 // Temperature and humidity have a comfortable middle rather than
                 // a "lower is better" scale, so a rising value is not inherently
                 // worse. `lower_is_better: true` keeps the arrow colors matching
                 // the previous release's behavior.
                 self.trend = Trend::between(value, previous, self.kind.unit(), Preference::Neither);
             }
+            EnvironmentCardInput::SetPosition(position) => self.position = position,
         }
     }
 }

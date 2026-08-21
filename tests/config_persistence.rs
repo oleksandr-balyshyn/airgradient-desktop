@@ -6,6 +6,7 @@ use airgradient_desktop::config::{
     read_config_from_path, write_config_to_path, AppConfig, ConfigStartupNotice, RefreshInterval,
 };
 use airgradient_desktop::device::DeviceBaseUrl;
+use airgradient_desktop::sensors::comfort::{ComfortRange, ComfortThresholds, Dimension};
 use airgradient_desktop::theme::DEFAULT_THEME_ID;
 
 #[test]
@@ -20,6 +21,12 @@ fn config_round_trip_uses_validated_values() {
         refresh_interval: RefreshInterval::new(45).expect("interval should be valid"),
         notifications_enabled: false,
         start_minimized: true,
+        comfort: ComfortThresholds {
+            temperature: ComfortRange::new(Dimension::Temperature, 19.0, 23.5)
+                .expect("range should be valid"),
+            humidity: ComfortRange::new(Dimension::Humidity, 35.0, 55.0)
+                .expect("range should be valid"),
+        },
         theme: "nord".to_string(),
     };
 
@@ -35,6 +42,10 @@ fn config_round_trip_uses_validated_values() {
     assert!(!loaded.config.notifications_enabled);
     assert!(loaded.config.start_minimized);
     assert_eq!(loaded.config.theme, "nord");
+    assert_eq!(loaded.config.comfort.temperature.min(), 19.0);
+    assert_eq!(loaded.config.comfort.temperature.max(), 23.5);
+    assert_eq!(loaded.config.comfort.humidity.min(), 35.0);
+    assert_eq!(loaded.config.comfort.humidity.max(), 55.0);
 }
 
 /// A config file written before themes existed has no `theme` key. Reading one
