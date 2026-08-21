@@ -158,8 +158,13 @@ jobs:
       # not depend on it, and letting the job continue when it fails, means such
       # an outage costs the release its .flatpak rather than every artifact:
       # the upload globs whatever was produced and the publish job tolerates a
-      # missing file. Check this step when a release is published without one.
+      # missing file.
+      #
+      # `continue-on-error` reports this step's conclusion as success even when
+      # it failed, which is why the next step exists: on its own, this one would
+      # drop the Flatpak bundle from a release without any visible signal.
       - name: Build Flatpak bundle
+        id: flatpak
         continue-on-error: true
         run: |
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
@@ -175,6 +180,19 @@ jobs:
             /tmp/airgradient-flatpak-repo-${{ matrix.artifact_arch }} \
             ${BIN_NAME}-${{ steps.version.outputs.version }}-linux-${{ matrix.artifact_arch }}.flatpak \
             ${APP_ID}
+
+      # Turn the masked failure above into something a human actually sees: a
+      # warning annotation on the run and a line in the job summary. The release
+      # still publishes without the bundle, but nobody has to read the log to
+      # find out that it did.
+      - name: Report a missing Flatpak bundle
+        if: steps.flatpak.outcome == 'failure'
+        run: |
+          message="Flatpak bundle was NOT built for ${{ matrix.artifact_arch }} - this release publishes without a .flatpak. Usually a Flathub outage; see the 'Build Flatpak bundle' step log."
+          echo "::warning title=Flatpak bundle missing::${message}"
+          echo "### :warning: Flatpak bundle missing (${{ matrix.artifact_arch }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "${message}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Linux ${{ matrix.artifact_arch }} artifacts
         uses: actions/upload-artifact@v4
