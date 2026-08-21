@@ -67,31 +67,38 @@ pub struct Dashboard {
 impl Dashboard {
     /// Send one sensor card its reading.
     ///
-    /// `metric_id` names the entry in `ui::metrics`, which supplies both the
-    /// colour thresholds and the unit, so the main view and the History tab
-    /// cannot drift apart on either.
+    /// `metric_id` names the entry in `ui::metrics`, which supplies everything
+    /// the card needs: which field of the snapshot to read, the colour
+    /// thresholds, and the unit. The main view and the History tab therefore
+    /// cannot drift apart on any of them.
     ///
-    /// `reported_unit` is for the two gas readings, which arrive as an index on
-    /// one device and a concentration on another: it replaces the metric's own
-    /// unit on the card and in the trend line. `None` means the metric's unit
-    /// is right, which is the case for everything else.
+    /// The two gas readings arrive as a sensor index on one device and a
+    /// concentration on another, so the payload has the last word: where the
+    /// metric reports a unit, it replaces the metric's own on the card and in
+    /// the trend line. Everything else has a fixed unit and reports `None`.
     ///
     /// Every reading handled here is a pollutant, so falling is an improvement.
     fn show_sensor(
         card: &Controller<SensorCard>,
         metric_id: &str,
-        value: Option<f32>,
-        previous: Option<f32>,
-        reported_unit: Option<&'static str>,
+        snapshot: &AirMeasureSnapshot,
+        previous: Option<&AirMeasureSnapshot>,
     ) {
         let metric = metrics::find(metric_id);
+        let value = metric.value(snapshot);
+        let reported_unit = metric.reported_unit(snapshot);
         let unit = reported_unit.unwrap_or(metric.unit);
 
         card.emit(SensorCardInput::Show(Reading {
             value,
             unit: reported_unit,
             status_class: metric.status_class(value),
-            trend: Trend::between(value, previous, unit, Preference::LowerIsBetter),
+            trend: Trend::between(
+                value,
+                previous.and_then(|previous| metric.value(previous)),
+                unit,
+                Preference::LowerIsBetter,
+            ),
         }));
     }
 
@@ -119,62 +126,17 @@ impl Dashboard {
             position: comfort.humidity,
         });
 
-        Self::show_sensor(
-            &self.co2,
-            CO2_ID,
-            snapshot.co2,
-            previous.and_then(|previous| previous.co2),
-            None,
-        );
-
-        // The gases report either a sensor index or a concentration depending on
-        // the device, so their unit comes from the payload rather than the card.
-        let tvoc_unit = metrics::find(TVOC_ID).reported_unit(snapshot);
-        Self::show_sensor(
-            &self.tvoc,
-            TVOC_ID,
-            snapshot.tvoc,
-            previous.and_then(|previous| previous.tvoc),
-            tvoc_unit,
-        );
-
-        let nox_unit = metrics::find(NOX_ID).reported_unit(snapshot);
-        Self::show_sensor(
-            &self.nox,
-            NOX_ID,
-            snapshot.nox,
-            previous.and_then(|previous| previous.nox),
-            nox_unit,
-        );
-
-        Self::show_sensor(
-            &self.pm003_count,
-            PM003_COUNT_ID,
-            snapshot.pm003_count,
-            previous.and_then(|previous| previous.pm003_count),
-            None,
-        );
-        Self::show_sensor(
-            &self.pm1,
-            PM1_ID,
-            snapshot.pm1,
-            previous.and_then(|previous| previous.pm1),
-            None,
-        );
-        Self::show_sensor(
-            &self.pm25,
-            PM25_ID,
-            snapshot.pm25,
-            previous.and_then(|previous| previous.pm25),
-            None,
-        );
-        Self::show_sensor(
-            &self.pm10,
-            PM10_ID,
-            snapshot.pm10,
-            previous.and_then(|previous| previous.pm10),
-            None,
-        );
+        for (card, metric_id) in [
+            (&self.co2, CO2_ID),
+            (&self.tvoc, TVOC_ID),
+            (&self.nox, NOX_ID),
+            (&self.pm003_count, PM003_COUNT_ID),
+            (&self.pm1, PM1_ID),
+            (&self.pm25, PM25_ID),
+            (&self.pm10, PM10_ID),
+        ] {
+            Self::show_sensor(card, metric_id, snapshot, previous);
+        }
     }
 }
 
