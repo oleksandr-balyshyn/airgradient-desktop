@@ -87,14 +87,6 @@ impl History {
         }
     }
 
-    pub fn samples(&self) -> &VecDeque<Sample> {
-        &self.samples
-    }
-
-    pub fn len(&self) -> usize {
-        self.samples.len()
-    }
-
     pub fn is_empty(&self) -> bool {
         self.samples.is_empty()
     }
@@ -249,7 +241,7 @@ mod tests {
     /// way for these tests to say what a history ended up containing.
     fn co2_series(history: &History) -> Vec<f32> {
         history
-            .samples()
+            .samples
             .iter()
             .filter_map(|sample| sample.snapshot.co2)
             .collect()
@@ -268,7 +260,7 @@ mod tests {
         history.push(sample(1, 400.0));
         history.push(sample(2, 500.0));
 
-        assert_eq!(history.len(), 2);
+        assert_eq!(history.samples.len(), 2);
         assert_eq!(co2_series(&history), vec![400.0, 500.0]);
         assert_eq!(history.latest(), Some(&snapshot(500.0)));
     }
@@ -280,7 +272,7 @@ mod tests {
             history.push(sample(second, second as f32 * 100.0));
         }
 
-        assert_eq!(history.len(), 3);
+        assert_eq!(history.samples.len(), 3);
         assert_eq!(co2_series(&history), vec![300.0, 400.0, 500.0]);
     }
 
@@ -289,7 +281,7 @@ mod tests {
         let mut history = History::with_capacity(0);
         history.push(sample(1, 400.0));
 
-        assert_eq!(history.len(), 1);
+        assert_eq!(history.samples.len(), 1);
     }
 
     #[test]
@@ -315,7 +307,7 @@ mod tests {
         history.save_to_path(&path).expect("history should write");
         let loaded = History::load_from_path(&path, 10);
 
-        assert_eq!(loaded.samples(), history.samples());
+        assert_eq!(loaded.samples, history.samples);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -332,7 +324,7 @@ mod tests {
 
         let loaded = History::load_from_path(&path, 4);
 
-        assert_eq!(loaded.len(), 4);
+        assert_eq!(loaded.samples.len(), 4);
         assert_eq!(co2_series(&loaded), vec![7.0, 8.0, 9.0, 10.0]);
         let _ = std::fs::remove_file(&path);
     }
