@@ -383,6 +383,47 @@ mod tests {
     }
 
     #[test]
+    fn hourly_means_treat_future_samples_as_the_current_hour() {
+        // A clock change - an NTP correction, or a laptop waking in a new
+        // timezone - can leave a sample stamped later than `now`. Counting it
+        // into the current hour is what `saturating_sub` buys; plain subtraction
+        // would panic in debug and wrap to a huge bucket index in release.
+        const HOUR: u64 = 3_600;
+        let mut history = History::default();
+        history.push(Sample {
+            recorded_at: 1_001 * HOUR,
+            snapshot: AirMeasureSnapshot {
+                pm25: Some(7.0),
+                ..AirMeasureSnapshot::default()
+            },
+        });
+
+        let means = history.hourly_means(1_000 * HOUR, 3, |snapshot| snapshot.pm25);
+
+        assert_eq!(means[0], Some(7.0), "a future sample counts as this hour");
+    }
+
+    #[test]
+    fn hourly_means_ignore_samples_older_than_the_window() {
+        const HOUR: u64 = 3_600;
+        let mut history = History::default();
+        history.push(Sample {
+            recorded_at: 995 * HOUR,
+            snapshot: AirMeasureSnapshot {
+                pm25: Some(7.0),
+                ..AirMeasureSnapshot::default()
+            },
+        });
+
+        let means = history.hourly_means(1_000 * HOUR, 2, |snapshot| snapshot.pm25);
+
+        assert!(
+            means.iter().all(Option::is_none),
+            "a sample five hours back must not land in a two-hour window"
+        );
+    }
+
+    #[test]
     fn a_missing_file_yields_an_empty_history() {
         let loaded = History::load_from_path(&temp_path("absent"), 10);
 
