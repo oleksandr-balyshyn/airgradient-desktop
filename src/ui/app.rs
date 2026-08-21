@@ -200,11 +200,9 @@ impl App {
         });
     }
 
-    /// Hand an alert to the desktop, reporting delivery failures on stderr.
+    /// Hand an alert to the desktop.
     fn deliver(alert: AlertNotification) {
-        if let Err(err) = send_air_quality_notification(&relm4::main_adw_application(), alert) {
-            eprintln!("System notification failed: {err}");
-        }
+        send_air_quality_notification(&relm4::main_adw_application(), alert);
     }
 }
 
@@ -463,21 +461,17 @@ impl Component for App {
             AppInput::Quit => relm4::main_application().quit(),
             AppInput::ThemeChanged(theme) => theming::apply(theme),
             AppInput::SendTestNotification => {
-                let result = send_air_quality_notification(
-                    &relm4::main_adw_application(),
-                    AlertNotification {
-                        id: "airgradient-test-notification".into(),
-                        title: "Air Monitor test notification".into(),
-                        body: "Notifications are working. Click this notification to open the \
-                               dashboard."
-                            .into(),
-                        severity: AlertSeverity::Notice,
-                    },
-                );
-                self.settings.emit(SettingsInput::SetStatus(match result {
-                    Ok(()) => "Test notification sent.".to_string(),
-                    Err(err) => format!("Test notification failed: {err}"),
-                }));
+                Self::deliver(AlertNotification {
+                    id: "airgradient-test-notification".into(),
+                    title: "Air Monitor test notification".into(),
+                    body: "Notifications are working. Click this notification to open the \
+                           dashboard."
+                        .into(),
+                    severity: AlertSeverity::Notice,
+                });
+                self.settings.emit(SettingsInput::SetStatus(
+                    "Test notification sent.".to_string(),
+                ));
             }
             AppInput::SaveConfig(config) => self.save_config(*config, &sender),
         }

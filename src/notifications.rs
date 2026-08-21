@@ -19,10 +19,13 @@ use crate::alerts::{AlertNotification, AlertSeverity};
 
 static NOTIFICATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-pub fn send_air_quality_notification(
-    app: &adw::Application,
-    alert: AlertNotification,
-) -> Result<(), String> {
+/// Hand one alert to the desktop.
+///
+/// There is no result to report: `send_notification` hands the notification to
+/// GLib, which delivers it asynchronously and tells the app nothing either way.
+/// This used to return `Result<(), String>` that was always `Ok`, which made
+/// both call sites carry a failure branch that could never run.
+pub fn send_air_quality_notification(app: &adw::Application, alert: AlertNotification) {
     let notification = gio::Notification::new(&alert.title);
     notification.set_body(Some(&alert.body));
     notification.set_default_action("app.show-dashboard");
@@ -38,5 +41,4 @@ pub fn send_air_quality_notification(
         NOTIFICATION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     );
     app.send_notification(Some(&unique_id), &notification);
-    Ok(())
 }
