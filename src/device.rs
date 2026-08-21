@@ -18,6 +18,13 @@ const REQUEST_TIMEOUT_SECS: u64 = 8;
 
 pub type DeviceResult<T> = Result<T, DeviceError>;
 
+/// A validated AirGradient device address.
+///
+/// The invariant, established once in `parse_server_url` and relied on
+/// everywhere else: the string is a scheme, a host, and an optional port, with
+/// no path, query, fragment, or trailing slash. `parse` is the only constructor,
+/// and the `Deserialize` impl routes through it, so a value in hand can always
+/// have an endpoint appended to it directly.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DeviceBaseUrl(String);
 
@@ -88,10 +95,7 @@ impl fmt::Display for DeviceError {
 impl std::error::Error for DeviceError {}
 
 pub fn fetch_current_measurements(base_url: &DeviceBaseUrl) -> DeviceResult<AirMeasureSnapshot> {
-    let url = format!(
-        "{}/measures/current",
-        base_url.as_str().trim_end_matches('/')
-    );
+    let url = format!("{base_url}/measures/current");
 
     // The client is small enough to create per request. If the app grows into a
     // high-frequency poller, this could be moved into shared state.
